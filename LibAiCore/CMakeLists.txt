@@ -4,11 +4,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 6.2 QUIET COMPONENTS Core)
+find_package(Qt6 6.2 QUIET COMPONENTS Core Network)
 if(Qt6_FOUND)
     set(QT_VERSION_MAJOR 6)
 else()
-    find_package(Qt5 5.15 REQUIRED COMPONENTS Core)
+    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Network)
     set(QT_VERSION_MAJOR 5)
 endif()
 
@@ -19,21 +19,51 @@ else()
     set(CMAKE_AUTOUIC ON)
 endif()
 include(GNUInstallDirs)
+find_package(Threads REQUIRED)
 
 if(QT_VERSION_MAJOR EQUAL 6)
-    qt_add_library(LibAiCore SHARED src/LibAiCore.cpp)
+    qt_add_library(LibAiCore SHARED
+        src/agent/Agent.cpp
+        src/tools/SchemaValidator.cpp
+        src/tools/ToolRegistry.cpp
+        src/tools/ToolExecutor.cpp
+        src/core/Cancellation.cpp
+        src/core/MediaResource.cpp
+        src/core/Message.cpp
+        src/stream/StreamSession.cpp
+        src/protocol/openai/OpenAIStreamDecoder.cpp
+        src/protocol/anthropic/AnthropicStreamDecoder.cpp
+        src/network/QtHttpTransport.cpp
+        src/protocol/openai/OpenAIChatCompatibleAdapter.cpp
+        src/protocol/anthropic/AnthropicMessagesAdapter.cpp
+        src/client/LLMClient.cpp
+        src/client/LLMClientFactory.cpp)
 else()
-    add_library(LibAiCore SHARED src/LibAiCore.cpp)
+    add_library(LibAiCore SHARED
+        src/agent/Agent.cpp
+        src/tools/SchemaValidator.cpp
+        src/tools/ToolRegistry.cpp
+        src/tools/ToolExecutor.cpp
+        src/core/Cancellation.cpp
+        src/core/MediaResource.cpp
+        src/core/Message.cpp
+        src/stream/StreamSession.cpp
+        src/protocol/openai/OpenAIStreamDecoder.cpp
+        src/protocol/anthropic/AnthropicStreamDecoder.cpp
+        src/network/QtHttpTransport.cpp
+        src/protocol/openai/OpenAIChatCompatibleAdapter.cpp
+        src/protocol/anthropic/AnthropicMessagesAdapter.cpp
+        src/client/LLMClient.cpp
+        src/client/LLMClientFactory.cpp)
 endif()
 add_library(AiLib::Core ALIAS LibAiCore)
-target_link_libraries(LibAiCore PRIVATE Qt${QT_VERSION_MAJOR}::Core)
-
-# An otherwise empty Windows DLL needs an export to produce its import library.
-if(WIN32)
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/empty_library.cpp"
-        "extern \"C\" __declspec(dllexport) void ailib_placeholder() {}\n")
-    target_sources(LibAiCore PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/empty_library.cpp")
-endif()
+target_link_libraries(LibAiCore PUBLIC Qt${QT_VERSION_MAJOR}::Core PRIVATE Qt${QT_VERSION_MAJOR}::Network Threads::Threads)
+target_compile_features(LibAiCore PUBLIC cxx_std_17)
+target_compile_definitions(LibAiCore PRIVATE AILIB_CORE_BUILD)
+target_include_directories(LibAiCore PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
 
 set_target_properties(LibAiCore PROPERTIES
     AILIB_QT_MAJOR ${QT_VERSION_MAJOR}
@@ -46,7 +76,11 @@ set_target_properties(LibAiCore PROPERTIES
 )
 
 install(TARGETS LibAiCore
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT SDK
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT SDK
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT SDK
+)
+
+install(DIRECTORY include/AiLib DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT SDK
+    FILES_MATCHING PATTERN "*.h"
 )

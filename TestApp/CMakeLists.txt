@@ -21,9 +21,9 @@ endif()
 include(GNUInstallDirs)
 
 if(QT_VERSION_MAJOR EQUAL 6)
-    qt_add_executable(TestApp WIN32 MACOSX_BUNDLE src/main.cpp)
+    qt_add_executable(TestApp WIN32 MACOSX_BUNDLE src/main.cpp src/DemoWindow.cpp src/DemoWindow.h)
 else()
-    add_executable(TestApp WIN32 MACOSX_BUNDLE src/main.cpp)
+    add_executable(TestApp WIN32 MACOSX_BUNDLE src/main.cpp src/DemoWindow.cpp src/DemoWindow.h)
 endif()
 target_link_libraries(TestApp PRIVATE AiLib::Core Qt${QT_VERSION_MAJOR}::Widgets)
 set_target_properties(TestApp PROPERTIES

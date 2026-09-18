@@ -1,0 +1,27 @@
+project(AiLibExamples LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+get_target_property(QT_VERSION_MAJOR AiLib::Core AILIB_QT_MAJOR)
+if(QT_VERSION_MAJOR EQUAL 6)
+    find_package(Qt6 6.2 REQUIRED COMPONENTS Core)
+else()
+    find_package(Qt5 5.15 REQUIRED COMPONENTS Core)
+endif()
+if(QT_VERSION_MAJOR EQUAL 6)
+    qt_add_executable(ailib_cli cli/main.cpp)
+else()
+    add_executable(ailib_cli cli/main.cpp)
+endif()
+target_link_libraries(ailib_cli PRIVATE AiLib::Core)
+if(WIN32)
+    add_custom_command(TARGET ailib_cli POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:LibAiCore>" "$<TARGET_FILE_DIR:ailib_cli>"
+        VERBATIM
+    )
+endif()
+if(BUILD_TESTING)
+    add_test(NAME CliChat COMMAND ailib_cli --mode chat)
+    add_test(NAME CliStream COMMAND ailib_cli --mode stream)
+    set_tests_properties(CliChat CliStream PROPERTIES TIMEOUT 10)
+endif()

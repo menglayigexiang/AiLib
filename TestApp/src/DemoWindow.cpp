@@ -1,0 +1,282 @@
+#include "DemoWindow.h"
+#include "../../examples/support/DemoSupport.h"
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QMessageBox>
+#include <QTimer>
+#include <QCloseEvent>
+#include <QTextCursor>
+
+namespace {
+// 一次确认的等待状态，每个调用独立创建；不保存全局确认队列。
+struct ApprovalWait {
+    std::mutex mutex;                                                          // 保护当前决定
+    std::condition_variable ready;                                             // 唤醒正在同步等待的线程
+    bool decided = false;                                                      // UI 是否已给出结果
+    AiLib::ToolApprovalDecision decision = AiLib::ToolApprovalDecision::Deny;  // 默认拒绝
+};
+}
+GuiApproval::GuiApproval(QWidget& parent) : m_parent(parent)  // 保存非拥有的 UI 接收窗口
+{
+}
+bool GuiApproval::requestApproval(const AiLib::ToolCall& call,                      // 待执行的规范化调用
+                                  const AiLib::FunctionToolDefinition& definition,  // 工具纯描述
+                                  const AiLib::ToolExecutionContext& context,       // 来源和停止上下文
+                                  AiLib::ToolApprovalResult& result,                // 输出用户确认决定
+                                  AiLib::SdkError& error)                           // 投递非阻塞弹窗，当前工作线程协作等待
+{
+    Q_UNUSED(definition)
+    if (QThread::currentThread() == m_parent.thread()) {
+        error.category = AiLib::ErrorCategory::Configuration;
+        error.code = QStringLiteral("GuiApprovalNeedsWorkerThread");
+        return false;
+    }
+    const auto state = std::make_shared<ApprovalWait>();  // 当前调用独立的共享等待状态
+    const bool queued = QMetaObject::invokeMethod(        // 确认投递是否成功
+        &m_parent,
+        [this, state, call, context]() {  // UI 线程创建确认弹窗
+            if (context.cancellation.isCancellationRequested() || context.isTimedOut())
+                return;
+            auto* box = new QMessageBox(  // 由 UI 窗口拥有的非模态弹窗
+                QMessageBox::Question, QStringLiteral("工具确认"),
+                QStringLiteral("Agent：%1\nCall：%2\nTool：%3\n参数：%4")
+                    .arg(context.agentId, call.id, call.name,
+                         QString::fromUtf8(
+                             QJsonDocument(call.arguments).toJson(QJsonDocument::Compact))),
+                QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+                &m_parent);
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            box->setDefaultButton(QMessageBox::No);
+            QObject::connect(box, &QDialog::finished, box,
+                             [state](int button) {                                // 写入用户决定并通知等待线程
+                                 std::lock_guard<std::mutex> lock(state->mutex);  // 保护单次确认状态
+                                 state->decision = button == QMessageBox::Yes
+                                                       ? AiLib::ToolApprovalDecision::Allow
+                                                   : button == QMessageBox::No
+                                                       ? AiLib::ToolApprovalDecision::Deny
+                                                       : AiLib::ToolApprovalDecision::Cancel;
+                                 state->decided = true;
+                                 state->ready.notify_one();
+                             });
+            auto* timer = new QTimer(box);  // UI 自己响应取消，关闭尚未完成的确认弹窗
+            QObject::connect(
+                timer, &QTimer::timeout, box, [box, context]() {  // UI 线程检查同一令牌和总截止时间
+                    if (context.cancellation.isCancellationRequested() || context.isTimedOut())
+                        box->reject();
+                });
+            timer->start(20);
+            box->setWindowModality(Qt::NonModal);
+            box->show();
+        },
+        Qt::QueuedConnection);
+    if (!queued) {
+        error.category = AiLib::ErrorCategory::Internal;
+        error.code = QStringLiteral("ApprovalDispatchFailed");
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(state->mutex);  // 工作线程等待，不占用 UI 线程
+    while (!state->decided) {
+        if (context.cancellation.isCancellationRequested() || context.isTimedOut()) {
+            result.decision = AiLib::ToolApprovalDecision::Cancel;
+            return true;
+        }
+        state->ready.wait_for(lock, std::chrono::milliseconds(20));
+    }
+    result.decision = state->decision;
+    return true;
+}
+DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初始 Provider 创建应用 UI 与工具依赖
+{
+    setWindowTitle(QStringLiteral("AiLib · 同步 Agent 示例"));
+    resize(760, 540);
+    auto* layout = new QVBoxLayout(this);  // 窗口主布局
+    auto* settings = new QHBoxLayout;      // Provider 与运行配置行
+    m_provider = new QComboBox(this);
+    m_provider->addItems({"offline", "deepseek", "kimi"});
+    m_provider->setCurrentText(initialProvider);
+    m_stream = new QCheckBox(QStringLiteral("Streaming"), this);
+    m_stream->setChecked(true);
+    m_tools = new QCheckBox(QStringLiteral("启用 add 工具（需确认）"), this);
+    m_tools->setChecked(true);
+    m_tools->setObjectName("tools");
+    settings->addWidget(m_provider);
+    settings->addWidget(m_stream);
+    settings->addWidget(m_tools);
+    layout->addLayout(settings);
+    m_output = new QPlainTextEdit(this);
+    m_output->setReadOnly(true);
+    m_output->setObjectName("output");
+    layout->addWidget(m_output);
+    m_input = new QLineEdit(
+        QStringLiteral("请调用 add 工具，参数 a=19、b=23，检查一个 C++ 加法函数测试，然后报告结果。"),
+        this);
+    m_input->setObjectName("input");
+    layout->addWidget(m_input);
+    auto* buttons = new QHBoxLayout;  // 应用操作按钮行
+    m_send = new QPushButton(QStringLiteral("发送"), this);
+    m_send->setObjectName("send");
+    m_stop = new QPushButton(QStringLiteral("Stop"), this);
+    m_stop->setObjectName("stop");
+    m_clear = new QPushButton(QStringLiteral("清空历史"), this);
+    m_status = new QLabel(
+        initialProvider == "offline" ? QStringLiteral("Ready · 离线，无需 API Key")
+                                    : QStringLiteral("Ready · %1").arg(initialProvider),
+        this);
+    m_status->setObjectName("status");
+    buttons->addWidget(m_send);
+    buttons->addWidget(m_stop);
+    buttons->addWidget(m_clear);
+    buttons->addWidget(m_status, 1);
+    layout->addLayout(buttons);
+    connect(m_send, &QPushButton::clicked, this,
+            [this]() {  // 启动同步 Agent 的应用工作线程
+                start();
+            });
+    connect(m_input, &QLineEdit::returnPressed, this, [this]() {  // 回车启动同一流程
+        start();
+    });
+    connect(m_stop, &QPushButton::clicked, this, [this]() {  // 请求协作取消
+        stop();
+    });
+    connect(m_clear, &QPushButton::clicked, this, [this]() {  // 清空应用历史和展示
+        m_history.clear();
+        m_output->clear();
+    });
+    connect(m_provider, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int index) {  // 切换服务时由应用清除不兼容历史
+                Q_UNUSED(index)
+                m_history.clear();
+                m_output->clear();
+            });
+    AiLib::SdkError error;  // 工具注册错误
+    if (!Demo::registerTools(m_registry, error)) {
+        m_status->setText(error.code);
+        m_send->setEnabled(false);
+    } else {
+        setBusy(false);
+    }
+}
+DemoWindow::~DemoWindow()  // 等待线程后才销毁其借用的工具和确认策略
+{
+    stop();
+    if (m_worker) {
+        m_worker->wait();
+        delete m_worker;
+    }
+}
+void DemoWindow::setBusy(bool busy)  // 控制应用运行期间可操作的 UI
+{
+    m_busy = busy;
+    m_send->setEnabled(!busy);
+    m_stop->setEnabled(busy);
+    m_clear->setEnabled(!busy);
+    m_provider->setEnabled(!busy);
+    m_tools->setEnabled(!busy);
+    m_stream->setEnabled(!busy);
+    m_input->setEnabled(!busy);
+}
+void DemoWindow::appendText(const QString& text)  // 将新片段追加到输出末尾
+{
+    m_output->moveCursor(QTextCursor::End);
+    m_output->insertPlainText(text);
+}
+void DemoWindow::stop()  // UI 线程只设置共享取消状态
+{
+    m_cancel.cancel();
+}
+void DemoWindow::closeEvent(QCloseEvent* event)  // 先停止并等待运行结束，UI 事件循环继续处理确认关闭
+{
+    if (m_busy) {
+        m_closePending = true;
+        stop();
+        event->ignore();
+        return;
+    }
+    QWidget::closeEvent(event);
+}
+void DemoWindow::start()  // 捕获 UI 配置值后启动应用工作线程
+{
+    if (m_busy || m_input->text().trimmed().isEmpty())
+        return;
+    if (m_worker) {
+        m_worker->wait();
+        delete m_worker;
+        m_worker = nullptr;
+    }
+    m_cancel = AiLib::CancellationSource{};
+    const auto cancellation = m_cancel.token();          // 当前 Run 唯一取消令牌
+    const QString provider = m_provider->currentText();  // UI 线程读取的服务配置
+    const bool stream = m_stream->isChecked();           // 当前流式展示选择
+    const bool tools = m_tools->isChecked();             // 当前工具白名单选择
+    QList<AiLib::Message> history = m_history;           // 工作线程消费的历史值副本
+    history.append(AiLib::Message::user(m_input->text()));
+    appendText(QStringLiteral("\nUser：%1\nAssistant：").arg(m_input->text()));
+    setBusy(true);
+    m_status->setText("Running");
+    m_worker = QThread::create([this, cancellation, provider, stream, tools,
+                                history]() {                           // 应用线程创建 Client 和 Agent 并同步调用
+        AiLib::SdkError error;                                         // 本轮 SDK 流程错误
+        QString model;                                                 // 当前模型名称
+        std::unique_ptr<AiLib::LLMClient> client;                      // 构造后移交 Agent 独占
+        AiLib::AgentResult result;                                     // 本轮实际增量
+        bool ok = Demo::createClient(provider, client, model, error);  // Factory 配置结果
+        if (ok) {
+            AiLib::Agent agent(  // 当前 Run 的同步执行器
+                std::move(client), m_registry, &m_approval, "widgets-agent");
+            AiLib::AgentRequest request;  // 本轮配置，不修改 UI 或 Client 默认值
+            request.chat = Demo::chatRequest(model, history, stream);
+            request.requestOptions.cancellation = cancellation;
+            if (tools)
+                request.enabledTools = {QStringLiteral("add")};
+            request.requestOptions.streamCallback =
+                [this](const AiLib::StreamEvent& event) {  // 实时事件只投递文字到 UI
+                    if (event.type == AiLib::StreamEventType::TextDelta) {
+                        const QString text = event.delta;  // 交给 UI 的片段副本
+                        QMetaObject::invokeMethod(
+                            this, [this, text]() {  // UI 线程更新展示
+                                appendText(text);
+                            }, Qt::QueuedConnection);
+                    }
+                };
+            request.callback = [this](const AiLib::AgentEvent& event) {  // 工具执行状态投递到 UI
+                QString text;                                            // 已标准化的工具状态摘要
+                if (event.type == AiLib::AgentEventType::ToolExecutionStarted) {
+                    text = QStringLiteral("\n[工具开始 %1]\n").arg(event.call.id);
+                } else {
+                    QString outcome = QStringLiteral("无结果");  // 本次工具流程的结果
+                    if (event.result)
+                        outcome = event.result->success ? QStringLiteral("成功") : event.result->errorCode;
+                    text = QStringLiteral("\n[工具结束 %1，%2，Handler=%3]\n").arg(
+                        event.call.id, outcome,
+                        event.handlerExecuted ? QStringLiteral("已执行") : QStringLiteral("未执行"));
+                }
+                QMetaObject::invokeMethod(
+                    this, [this, text]() {  // UI 线程展示状态
+                        appendText(text);
+                    }, Qt::QueuedConnection);
+            };
+            ok = agent.run(request, result, error);
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, ok, result, error, stream, history]() {  // UI 线程处理最终响应和应用历史
+                if (!stream) {
+                    for (const auto& message : result.newMessages) {  // 本轮实际产生的 Assistant 文本
+                        if (message.role == AiLib::Role::Assistant)
+                            appendText(message.text());
+                    }
+                }
+                if (ok && result.finishReason == AiLib::AgentFinishReason::Completed) {
+                    m_history = history;
+                    m_history.append(result.newMessages);
+                }
+                m_status->setText(ok ? Demo::finishName(result.finishReason)
+                                     : QStringLiteral("Failed · %1").arg(error.code));
+                setBusy(false);
+                if (m_closePending)
+                    close();
+            },
+            Qt::QueuedConnection);
+    });
+    m_worker->start();
+}
