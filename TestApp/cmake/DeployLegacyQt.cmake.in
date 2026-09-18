@@ -1,0 +1,27 @@
+set(prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+if(APPLE)
+    execute_process(
+        COMMAND "@qt_deploy_tool@" "${prefix}/TestApp.app" "-libpath=${prefix}/@CMAKE_INSTALL_LIBDIR@" "-libpath=@qt_lib_dir@"
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+elseif(WIN32)
+    if(CMAKE_INSTALL_CONFIG_NAME STREQUAL "Debug")
+        set(configuration --debug)
+    else()
+        set(configuration --release)
+    endif()
+    execute_process(
+        COMMAND "@qt_deploy_tool@" ${configuration} "${prefix}/@CMAKE_INSTALL_BINDIR@/TestApp.exe"
+        COMMAND_ERROR_IS_FATAL ANY
+    )
+else()
+    # BundleUtilities resolves Qt and plugin dependencies on older Qt releases.
+    file(INSTALL "@qt_plugin_dir@/platforms/"
+        DESTINATION "${prefix}/@CMAKE_INSTALL_BINDIR@/plugins/platforms"
+        FILES_MATCHING PATTERN "*.so")
+    file(WRITE "${prefix}/@CMAKE_INSTALL_BINDIR@/qt.conf" "[Paths]\nPlugins=plugins\n")
+    file(GLOB plugins "${prefix}/@CMAKE_INSTALL_BINDIR@/plugins/platforms/*.so")
+    include(BundleUtilities)
+    fixup_bundle("${prefix}/@CMAKE_INSTALL_BINDIR@/TestApp" "${plugins}"
+        "${prefix}/@CMAKE_INSTALL_LIBDIR@;@qt_lib_dir@")
+endif()
