@@ -27,9 +27,11 @@ int main(int argc, char* argv[])  // 用显式 Provider 参数执行真实取消
     QTextStream log(stdout);                                                // 只输出不含凭据的验收摘要
     const QString provider = application.arguments().value(1, "deepseek");  // 待验收服务
     AiLib::SdkError error;                                                  // SDK 流程故障
-    QString model;                                                          // 当前模型名称
+    if (!Demo::ensureBuiltinCatalog(error)) return 2;
+    const auto entry = AiLib::ModelRegistry::instance().findProvider(provider);  // Provider 目录副本
+    const QString model = entry && !entry->models.isEmpty() ? entry->models.first().id : QString();  // 默认模型名称
     std::unique_ptr<AiLib::LLMClient> client;                               // 验收用的独占 Client
-    if (!Demo::createClient(provider, client, model, error)) {
+    if (!Demo::createClient(provider, model, Demo::demoApiKeyFromEnv(provider), client, error)) {
         log << "factory_failed code=" << error.code << '\n';
         return 2;
     }

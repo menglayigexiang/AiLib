@@ -30,7 +30,7 @@ private:
 class DemoWindow final : public QWidget {
 public:
     explicit DemoWindow(
-        QString initialProvider = QStringLiteral("offline"));  // 按初始 Provider 创建表单并注册示例工具
+        QString initialProvider = QStringLiteral("deepseek"));  // 按初始 Provider 创建表单并注册示例工具
     ~DemoWindow() override;                              // 取消并等待工作线程后释放 Registry 和 Approval
 protected:
     void closeEvent(QCloseEvent* event) override;  // 运行中先请求停止，完成后再关闭
@@ -39,7 +39,10 @@ private:
     void stop();                           // 请求唯一取消来源停止，不强行终止线程
     void appendText(const QString& text);  // UI 线程追加模型文字
     void setBusy(bool busy);               // 运行时禁用配置修改，允许 Stop
-    QComboBox* m_provider = nullptr;       // 离线或真实 Provider 选择
+    void refreshModels();                  // 根据当前 Provider 重建模型选择项
+    QComboBox* m_provider = nullptr;       // 已注册 Provider 选择
+    QComboBox* m_model = nullptr;          // 当前 Provider 的已知或手工模型 ID
+    QLineEdit* m_apiKey = nullptr;         // 真实服务认证密钥，仅本次运行有效，不持久化
     QCheckBox* m_stream = nullptr;         // 是否开启 Streaming
     QCheckBox* m_tools = nullptr;          // 是否提供 add 工具白名单
     QLineEdit* m_input = nullptr;          // 下一轮用户输入

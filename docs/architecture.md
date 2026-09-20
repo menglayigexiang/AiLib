@@ -56,7 +56,9 @@ ProviderConfig 显式选择 ProtocolType。baseUrl 是 API 根路径，Adapter �
 
 Header 名称比较不区分大小写；customHeaders 可覆盖默认认证。Adapter 控制的 Protected Headers 冲突报错。extraParameters 是 JSON 参数，不能包含 Adapter 的 reserved fields，即使对应标准字段未设置也不能使用。所有检查在 HTTP 发送前执行。
 
-ProviderConfig 构造时由 Client 按值保存，之后不提供修改接口。LLMClient unique_ptr 独占 Adapter、Transport，Factory 转移所有权；直接注入同样适用。Factory 目前提供真实实现的 OpenAIChatCompatibleAdapter 和 AnthropicMessagesAdapter，其他内置协议报 UnsupportedProtocol。
+ProviderConfig 构造时由 Client 按值保存，之后不提供修改接口。LLMClient unique_ptr 独占 Adapter、Transport，Factory 转移所有权；直接注入同样适用。Factory 目前提供真实实现的 OpenAIChatCompatibleAdapter、OpenAIResponsesAdapter 和 AnthropicMessagesAdapter，`supportsProtocol()` 报告同一组实际能力，其他内置协议报 UnsupportedProtocol。
+
+ModelRegistry 保存无凭据 ProviderConfig 模板及其已知 ModelInfo 列表。注册与查询由读写锁保护，查询返回值快照；模型使用 providerId + modelId 定位。目录提供已知信息而非调用白名单，未收录模型仍可由应用在已注册 Provider 下发送。
 
 ChatResponse 只表达一个 Assistant 响应，正式结果候选数必须是一个。Streaming 的 Usage-only 事件不单独计算候选。多候选不得静默丢弃。
 
@@ -120,4 +122,4 @@ LLMClient 已实现既定固定间隔重试，网络临时错误、429/5xx 分�
 
 ## 阶段 8 当前实现
 
-CLI 与 Widgets Demo 由应用自行管理线程、确认与历史，默认离线验证真实协议和工具闭环。GUI 工作线程同步 run，UI 队列更新文本与非模态确认，等待中检查同一取消令牌与截止时间；SDK 不增加 Widgets 或线程创建依赖。示例细节与验证范围见 [示例使用说明](examples.md) 和 [阶段 8 报告](phase8-report.md)。
+CLI 与 Widgets Demo 由应用自行管理线程、确认与历史，并从统一模型目录选择真实 Provider 和模型。GUI 工作线程同步 run，UI 队列更新文本与非模态确认，等待中检查同一取消令牌与截止时间；SDK 不增加 Widgets 或线程创建依赖。示例细节与验证范围见 [示例使用说明](examples.md) 和 [阶段 8 报告](phase8-report.md)。

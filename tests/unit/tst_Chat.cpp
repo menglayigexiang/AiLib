@@ -434,7 +434,7 @@ private slots:
         QVERIFY(!output.usage.inputTokens);
         QCOMPARE(error.category, ErrorCategory::None);
     }
-    void factoryAndCustomInjection()  // Factory 只创建真实内置协议，自定义注入不依赖协议枚举
+    void factoryAndCustomInjection()  // Factory 创建已实现协议，自定义注入不依赖协议枚举
     {
         auto config = provider();           // 待切换协议的服务配置
         std::unique_ptr<LLMClient> client;  // 接收 Factory 转移的 Client 所有权
@@ -442,6 +442,9 @@ private slots:
         QVERIFY(LLMClientFactory::create(config, client, error));
         auto* previous = client.get();  // 失败前已有 Client，用于验证失败不覆盖输出
         config.protocol = ProtocolType::OpenAIResponses;
+        QVERIFY(LLMClientFactory::create(config, client, error));
+        previous = client.get();
+        config.protocol = ProtocolType::GeminiGenerateContent;
         QVERIFY(!LLMClientFactory::create(config, client, error));
         QCOMPARE(error.code, QStringLiteral("UnsupportedProtocol"));
         QCOMPARE(client.get(), previous);

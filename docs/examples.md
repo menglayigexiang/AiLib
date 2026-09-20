@@ -1,6 +1,6 @@
 # CLI 与 Qt Widgets 示例
 
-示例默认使用 `offline`。它通过示例专用 ITransport 模拟原始 HTTP/SSE 响应，仍经过真实 OpenAI Adapter、Session、Client、Approval、ToolExecutor 和 Agent。无需网络或 API Key。固定工具参数为 `a=19, b=23`；离线回答用于验证调用流程，不模拟模型智能。
+示例从统一 Provider 模型目录选择真实服务。首批包含 DeepSeek、Kimi 和 OpenAI；运行前需要提供对应 API Key。自动测试使用 FakeTransport 等测试替身，不把 Mock 建模为 Provider。
 
 ## 构建和运行
 
@@ -13,15 +13,14 @@ ctest --test-dir build -C Debug --output-on-failure
 CLI 单配置生成器路径为 `build/examples/ailib_cli`；多配置生成器根据配置进入 Debug/Release 子目录，Windows 文件名带 `.exe`。
 
 ```sh
-build/examples/ailib_cli --mode chat --prompt "你好"
-build/examples/ailib_cli --mode stream --prompt "你好"
-build/examples/ailib_cli --mode agent
-build/examples/ailib_cli --mode agent --no-stream
+build/examples/ailib_cli --provider deepseek --mode chat --prompt "你好"
+build/examples/ailib_cli --provider kimi --mode stream --prompt "你好"
+build/examples/ailib_cli --provider openai --model gpt-5.6-sol --mode agent
 ```
 
 Agent 工具确认时：`1` 允许、`2` 拒绝、`3` 取消整个 Run；EOF 或其他输入默认拒绝。拒绝产生 ApprovalDenied ToolResult，模型可继续回答；取消正常结束为 Cancelled。CLI 所有流程在当前线程执行，阻塞式 stdin 无法被取消令牌强制打断；没有增加信号处理或输入线程。
 
-Widgets 程序位于 `TestApp/bin/Debug` 或对应配置目录。macOS 启动 `TestApp.app`；Windows 启动 `TestApp.exe`；Linux 启动 `TestApp`。当前默认离线、Streaming、启用 add 工具。
+Widgets 程序位于 `TestApp/bin/Debug` 或对应配置目录。macOS 启动 `TestApp.app`；Windows 启动 `TestApp.exe`；Linux 启动 `TestApp`。界面从统一目录提供 Provider 和可编辑模型选择，并默认启用 Streaming 与 add 工具。
 
 1. 点击发送或回车，输入和配置被冻结，应用创建工作线程运行同步 Agent。
 2. 模型完整生成 ToolCall 后显示确认弹窗，默认拒绝。Yes/No/Cancel 分别对应 Allow/Deny/Cancel。
@@ -38,15 +37,16 @@ Widgets 保存完整历史，给工作线程传值副本。Completed 后，应�
 
 CLI 也演示 Completed 后追加 newMessages，但只执行一轮后退出，不保存到磁盘。普通 chat/stream 模式直接调用 Client，不经过 Agent。
 
-## 可选真实 Provider
+## 真实 Provider
 
-在调用方环境设置 `DEEPSEEK_API_KEY` 或 `KIMI_CODE_API_KEY`。不要把 Key 放到源码或运行命令参数中。CLI 用 `--provider deepseek` / `--provider kimi`；Widgets 在 Provider 下拉框选择相应服务。缺少环境变量时明确显示 MissingEnvironmentKey，不发送 HTTP 请求。
+在调用方环境设置 `DEEPSEEK_API_KEY`、`KIMI_CODE_API_KEY` 或 `OPENAI_API_KEY`。不要把 Key 放到源码或运行命令参数中。CLI 根据 `--provider` 读取对应环境变量；Widgets 在窗口顶部输入密钥，密钥只保留在控件内存中。Key 为空时明确显示 MissingApiKey，不发送 HTTP 请求。
 
-DeepSeek 使用已有手动测试配置 `deepseek-flash` 和 OpenAI Chat Compatible；Kimi Code 使用 `kimi-for-coding` 和 Anthropic Messages。示例关闭这两种模型的 thinking，避免当前 canonical reasoning 数据无法回传 Provider 专属签名的问题。模型名称和服务可用性以实际服务为准；后续变更示例配置即可，不由 SDK 猜测。
+DeepSeek 使用 `deepseek-flash` 和 OpenAI Chat Compatible；Kimi Code 使用 `kimi-for-coding` 和 Anthropic Messages；OpenAI 使用 Responses 协议并收录 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`。模型框允许输入当前 Provider 下尚未收录的 model ID，目录不作为调用白名单。
 
 ```sh
 build/examples/ailib_cli --provider deepseek --mode agent
 build/examples/ailib_cli --provider kimi --mode agent
+build/examples/ailib_cli --provider openai --model gpt-5.6-sol --mode agent
 ```
 
 工具为无副作用加法；示例仍默认 Always 确认，用于展示应用策略。真实模型不保证按每个提示调用工具；若不调用工具，普通回答也能正常结束。
@@ -59,7 +59,7 @@ macOS Qt 6.11.1/C++17 已编译并通过自动测试；Widgets 使用 offscreen 
 
 ## 真实服务的代码验收
 
-Widgets 支持 `--provider deepseek` / `--provider kimi` 启动配置，凭据仍仅从环境读取。真实服务验收优先使用代码断言，不进行逐步 UI 截图。
+Widgets 支持 `--provider deepseek` / `--provider kimi` / `--provider openai` 启动配置。真实服务验收优先使用代码断言，不进行逐步 UI 截图。
 
 启用 `AILIB_BUILD_MANUAL_TESTS=ON` 后新增 `manual_agent_acceptance deepseek|kimi` 和 `manual_gui_acceptance`。前者检查确认 Cancel 与有效文本取消后的 Incomplete；后者通过 Qt Test 调用实际 DemoWindow，检查 Allow/Deny、确认等待 Stop 和流式 Stop。两个目标不进入 CTest。macOS/Linux 可用 `QT_QPA_PLATFORM=offscreen build/tests/manual_gui_acceptance` 执行无截图测试。
 

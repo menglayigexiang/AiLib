@@ -33,7 +33,8 @@ int main(int argc, char* argv[])  // 解析命令行参数，展示普通、流�
     QCommandLineParser parser;                 // 命令行配置
     parser.setApplicationDescription("AiLib synchronous CLI example");
     parser.addHelpOption();
-    parser.addOption({{"p", "provider"}, "offline / deepseek / kimi", "provider", "offline"});
+    parser.addOption({{"p", "provider"}, "deepseek / kimi / openai", "provider", "deepseek"});
+    parser.addOption({{"M", "model"}, "Model ID; defaults to the first catalog model", "model"});
     parser.addOption({{"m", "mode"}, "chat / stream / agent", "mode", "agent"});
     parser.addOption({"prompt", "User input", "text", "请调用 add 工具，参数 a=19、b=23，检查一个 C++ 加法函数测试，然后报告结果。"});
     parser.addOption({"no-stream", "Disable streaming in Agent mode"});
@@ -43,9 +44,21 @@ int main(int argc, char* argv[])  // 解析命令行参数，展示普通、流�
     if (mode != "chat" && mode != "stream" && mode != "agent")
         parser.showHelp(2);
     AiLib::SdkError error;                     // 本次流程错误
-    QString model;                             // 选定服务的模型名称
+    if (!Demo::ensureBuiltinCatalog(error)) {
+        output << error.code << '\n';
+        return 2;
+    }
+    const QString providerId = parser.value("provider");  // 选定 Provider ID
+    const auto providerEntry = AiLib::ModelRegistry::instance().findProvider(providerId);  // Provider 目录副本
+    if (!providerEntry) {
+        output << "UnknownDemoProvider\n";
+        return 2;
+    }
+    QString model = parser.value("model").trimmed();  // 用户指定或目录默认模型 ID
+    if (model.isEmpty() && !providerEntry->models.isEmpty())
+        model = providerEntry->models.first().id;
     std::unique_ptr<AiLib::LLMClient> client;  // 将所有权移交给 Agent 或独立使用
-    if (!Demo::createClient(parser.value("provider"), client, model, error)) {
+    if (!Demo::createClient(providerId, model, Demo::demoApiKeyFromEnv(providerId), client, error)) {
         output << error.code << '\n';
         return 2;
     }

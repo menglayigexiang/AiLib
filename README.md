@@ -1,6 +1,6 @@
 # AiLib
 
-基于 Qt/C++ 的跨平台 LLM SDK，当前已完成阶段 1–8：公共模型、普通 Chat、Streaming、本地 Function Tool、Agent Loop 和网络重试。支持 OpenAI Chat Compatible、Anthropic Messages 两种协议，核心 API 全部同步，线程与历史由应用管理。CLI 和 Qt Widgets Demo 已提供，默认离线运行，也可连接真实服务。
+基于 Qt/C++ 的跨平台 LLM SDK，当前已完成公共模型、普通 Chat、Streaming、本地 Function Tool、Agent Loop、网络重试及 Provider 模型目录。支持 OpenAI Chat Compatible、OpenAI Responses、Anthropic Messages 三种协议，核心 API 全部同步，线程与历史由应用管理。CLI 和 Qt Widgets Demo 连接真实服务运行。
 
 要求 CMake 3.21+、C++17、动态链接版本的 Qt 6.2+ 或 Qt 5.15。优先选择 Qt 6。库目标为 `AiLib::Core`，公共头文件通过 `<AiLib/...>` 使用；Qt Core 和 C++17 需求向消费目标传播。只有 TestApp 和 UI 测试依赖 Widgets，SDK 公共模型依赖 Core，网络实现私有依赖 Network。
 
@@ -79,6 +79,8 @@ Adapter 在 API 根地址后追加 `/v1/messages`，这里不要把 baseUrl 写�
 
 DeepSeek 的 OpenAI Compatible 手动测试使用同一个 `AILIB_BUILD_MANUAL_TESTS` 开关。设置 `DEEPSEEK_API_KEY` 后运行 `build/tests/manual_deepseek_chat`；当前配置为 `https://api.deepseek.com`、`deepseek-flash`，关闭 thinking，验证普通 Chat 和加法工具往返。真实验证记录见 [DeepSeek 接入测试](docs/deepseek-test-report.md)。
 
+OpenAI Responses 使用 `ProtocolType::OpenAIResponses`，Factory 在 API 根地址后追加 `/responses`。示例目录收录 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`，凭据由应用通过 `OPENAI_API_KEY` 或 Widgets 输入框提供。Adapter 支持普通响应、SSE 流和 Function Tools。
+
 流式调用示例（沿用已创建的 client）：
 
 ```cpp
@@ -109,6 +111,6 @@ const bool ok = client->chat(request, response, error, options);  // 同步等�
 
 重试只针对启用的临时连接错误、429 和 5xx，优先采用 Retry-After。等待和每次尝试受共享取消令牌及精确 deadline 约束；Streaming 有效输出后不再重试。实现边界与网络验证见 [阶段 7 验收记录](docs/phase7-report.md)。
 
-CLI 与 Qt Widgets Demo 的运行、同步确认和历史维护方式见 [示例使用说明](docs/examples.md)。默认 `build/examples/ailib_cli --mode agent` 可离线验证完整工具闭环；GUI 运行 `TestApp/bin/Debug` 下的 TestApp 应用。
+CLI 与 Qt Widgets Demo 的运行、同步确认和历史维护方式见 [示例使用说明](docs/examples.md)。运行前设置对应 Provider 的 API Key；GUI 位于 `TestApp/bin/Debug` 下的 TestApp 应用。
 
 第一版真实服务结果见 [真实服务验收报告](docs/live-acceptance-report.md)。DeepSeek 核心闭环和取消通过；Kimi 在明确 C++ 测试提示下的闭环、确认取消和 GUI Stop 已复验通过，但短提示及 Auto 仍可能不生成工具，详见 [Kimi 工具复验](docs/kimi-tool-followup.md)。可选手动目标 `manual_agent_acceptance` 和 `manual_gui_acceptance` 提供代码复验，不进入 CTest。

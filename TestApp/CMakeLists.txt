@@ -25,7 +25,7 @@ if(QT_VERSION_MAJOR EQUAL 6)
 else()
     add_executable(TestApp WIN32 MACOSX_BUNDLE src/main.cpp src/DemoWindow.cpp src/DemoWindow.h)
 endif()
-target_link_libraries(TestApp PRIVATE AiLib::Core Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(TestApp PRIVATE AiLib::Core ailib_demo_support Qt${QT_VERSION_MAJOR}::Widgets)
 set_target_properties(TestApp PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/bin/$<CONFIG>"
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.ailib.TestApp"

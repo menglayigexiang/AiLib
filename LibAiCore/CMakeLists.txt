@@ -32,12 +32,16 @@ if(QT_VERSION_MAJOR EQUAL 6)
         src/core/Message.cpp
         src/stream/StreamSession.cpp
         src/protocol/openai/OpenAIStreamDecoder.cpp
+        src/protocol/openai/OpenAIResponsesStreamDecoder.cpp
         src/protocol/anthropic/AnthropicStreamDecoder.cpp
         src/network/QtHttpTransport.cpp
         src/protocol/openai/OpenAIChatCompatibleAdapter.cpp
+        src/protocol/openai/OpenAIResponsesAdapter.cpp
         src/protocol/anthropic/AnthropicMessagesAdapter.cpp
         src/client/LLMClient.cpp
-        src/client/LLMClientFactory.cpp)
+        src/client/LLMClientFactory.cpp
+        src/provider/ModelRegistry.cpp)
+
 else()
     add_library(LibAiCore SHARED
         src/agent/Agent.cpp
@@ -49,12 +53,15 @@ else()
         src/core/Message.cpp
         src/stream/StreamSession.cpp
         src/protocol/openai/OpenAIStreamDecoder.cpp
+        src/protocol/openai/OpenAIResponsesStreamDecoder.cpp
         src/protocol/anthropic/AnthropicStreamDecoder.cpp
         src/network/QtHttpTransport.cpp
         src/protocol/openai/OpenAIChatCompatibleAdapter.cpp
+        src/protocol/openai/OpenAIResponsesAdapter.cpp
         src/protocol/anthropic/AnthropicMessagesAdapter.cpp
         src/client/LLMClient.cpp
-        src/client/LLMClientFactory.cpp)
+        src/client/LLMClientFactory.cpp
+        src/provider/ModelRegistry.cpp)
 endif()
 add_library(AiLib::Core ALIAS LibAiCore)
 target_link_libraries(LibAiCore PUBLIC Qt${QT_VERSION_MAJOR}::Core PRIVATE Qt${QT_VERSION_MAJOR}::Network Threads::Threads)

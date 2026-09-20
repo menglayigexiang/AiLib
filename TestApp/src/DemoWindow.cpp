@@ -92,14 +92,31 @@ DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初�
     auto* layout = new QVBoxLayout(this);  // 窗口主布局
     auto* settings = new QHBoxLayout;      // Provider 与运行配置行
     m_provider = new QComboBox(this);
-    m_provider->addItems({"offline", "deepseek", "kimi"});
-    m_provider->setCurrentText(initialProvider);
+    m_provider->setObjectName(QStringLiteral("provider"));
+    AiLib::SdkError catalogError;  // 内置目录首次注册错误
+    if (Demo::ensureBuiltinCatalog(catalogError)) {
+        for (const AiLib::ProviderEntry& entry : AiLib::ModelRegistry::instance().providers())  // 当前 Provider 条目
+            m_provider->addItem(entry.configTemplate.name, entry.configTemplate.id);
+    }
+    const int initialIndex = m_provider->findData(initialProvider);  // 请求的初始 Provider 位置
+    if (initialIndex >= 0)
+        m_provider->setCurrentIndex(initialIndex);
+    m_model = new QComboBox(this);
+    m_model->setObjectName(QStringLiteral("model"));
+    m_model->setEditable(true);
+    refreshModels();
+    m_apiKey = new QLineEdit(this);  // 明文输入，不做持久化，关窗即失
+    m_apiKey->setPlaceholderText(QStringLiteral("API Key"));
+    m_apiKey->setObjectName("apiKey");
+    m_apiKey->setClearButtonEnabled(true);
     m_stream = new QCheckBox(QStringLiteral("Streaming"), this);
     m_stream->setChecked(true);
     m_tools = new QCheckBox(QStringLiteral("启用 add 工具（需确认）"), this);
     m_tools->setChecked(true);
     m_tools->setObjectName("tools");
     settings->addWidget(m_provider);
+    settings->addWidget(m_model);
+    settings->addWidget(m_apiKey, 1);
     settings->addWidget(m_stream);
     settings->addWidget(m_tools);
     layout->addLayout(settings);
@@ -118,10 +135,7 @@ DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初�
     m_stop = new QPushButton(QStringLiteral("Stop"), this);
     m_stop->setObjectName("stop");
     m_clear = new QPushButton(QStringLiteral("清空历史"), this);
-    m_status = new QLabel(
-        initialProvider == "offline" ? QStringLiteral("Ready · 离线，无需 API Key")
-                                    : QStringLiteral("Ready · %1").arg(initialProvider),
-        this);
+    m_status = new QLabel(QStringLiteral("Ready · %1").arg(initialProvider), this);
     m_status->setObjectName("status");
     buttons->addWidget(m_send);
     buttons->addWidget(m_stop);
@@ -147,6 +161,7 @@ DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初�
                 Q_UNUSED(index)
                 m_history.clear();
                 m_output->clear();
+                refreshModels();
             });
     AiLib::SdkError error;  // 工具注册错误
     if (!Demo::registerTools(m_registry, error)) {
@@ -171,9 +186,23 @@ void DemoWindow::setBusy(bool busy)  // 控制应用运行期间可操作的 UI
     m_stop->setEnabled(busy);
     m_clear->setEnabled(!busy);
     m_provider->setEnabled(!busy);
+    m_model->setEnabled(!busy);
+    m_apiKey->setEnabled(!busy);
     m_tools->setEnabled(!busy);
     m_stream->setEnabled(!busy);
     m_input->setEnabled(!busy);
+}
+void DemoWindow::refreshModels()  // 使用当前 Provider 的目录值重建可编辑模型框
+{
+    const QString providerId = m_provider->currentData().toString();  // 当前 Provider 稳定 ID
+    const auto entry = AiLib::ModelRegistry::instance().findProvider(providerId);  // Provider 目录副本
+    m_model->clear();
+    if (!entry)
+        return;
+    for (const AiLib::ModelInfo& model : entry->models)  // 当前已知模型
+        m_model->addItem(model.displayName.isEmpty() ? model.id : model.displayName, model.id);
+    if (m_model->count() > 0)
+        m_model->setEditText(m_model->itemData(0).toString());
 }
 void DemoWindow::appendText(const QString& text)  // 将新片段追加到输出末尾
 {
@@ -205,7 +234,11 @@ void DemoWindow::start()  // 捕获 UI 配置值后启动应用工作线程
     }
     m_cancel = AiLib::CancellationSource{};
     const auto cancellation = m_cancel.token();          // 当前 Run 唯一取消令牌
-    const QString provider = m_provider->currentText();  // UI 线程读取的服务配置
+    const QString provider = m_provider->currentData().toString();  // UI 线程读取的 Provider ID
+    const QString model = m_model->currentData().isValid() && m_model->currentText() == m_model->itemText(m_model->currentIndex())
+        ? m_model->currentData().toString() : m_model->currentText().trimmed();  // 已知或手工模型 ID
+    const QString enteredApiKey = m_apiKey->text().trimmed();  // 用户为本轮 Run 输入的密钥
+    const QString apiKey = enteredApiKey.isEmpty() ? Demo::demoApiKeyFromEnv(provider) : enteredApiKey;  // 输入优先，空时回退环境变量
     const bool stream = m_stream->isChecked();           // 当前流式展示选择
     const bool tools = m_tools->isChecked();             // 当前工具白名单选择
     QList<AiLib::Message> history = m_history;           // 工作线程消费的历史值副本
@@ -213,13 +246,12 @@ void DemoWindow::start()  // 捕获 UI 配置值后启动应用工作线程
     appendText(QStringLiteral("\nUser：%1\nAssistant：").arg(m_input->text()));
     setBusy(true);
     m_status->setText("Running");
-    m_worker = QThread::create([this, cancellation, provider, stream, tools,
+    m_worker = QThread::create([this, cancellation, provider, model, apiKey, stream, tools,
                                 history]() {                           // 应用线程创建 Client 和 Agent 并同步调用
         AiLib::SdkError error;                                         // 本轮 SDK 流程错误
-        QString model;                                                 // 当前模型名称
         std::unique_ptr<AiLib::LLMClient> client;                      // 构造后移交 Agent 独占
         AiLib::AgentResult result;                                     // 本轮实际增量
-        bool ok = Demo::createClient(provider, client, model, error);  // Factory 配置结果
+        bool ok = Demo::createClient(provider, model, apiKey, client, error);  // Factory 配置结果
         if (ok) {
             AiLib::Agent agent(  // 当前 Run 的同步执行器
                 std::move(client), m_registry, &m_approval, "widgets-agent");

@@ -7,10 +7,10 @@ int main(int argc, char* argv[])  // 使用命令行参数创建 GUI 环境，SD
     QApplication application(argc, argv);  // 应用事件循环
     QCommandLineParser parser;             // GUI 启动配置，不接受命令行凭据
     parser.addHelpOption();
-    parser.addOption({"provider", "offline / deepseek / kimi", "provider", "offline"});
+    parser.addOption({"provider", "deepseek / kimi / openai", "provider", "deepseek"});
     parser.process(application);
     const QString provider = parser.value("provider");  // 初始服务配置
-    if (provider != "offline" && provider != "deepseek" && provider != "kimi")
+    if (provider != "deepseek" && provider != "kimi" && provider != "openai")
         parser.showHelp(2);
     DemoWindow window(provider);  // 应用拥有的工具、确认策略和工作线程
     window.show();

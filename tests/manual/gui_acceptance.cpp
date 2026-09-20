@@ -1,4 +1,5 @@
 #include "../../TestApp/src/DemoWindow.h"
+#include "../../examples/support/DemoSupport.h"
 #include <QtTest>
 #include <QMessageBox>
 
@@ -20,6 +21,7 @@ private slots:
         QFETCH(QString, provider);                                   // 本次真实服务
         QFETCH(bool, allow);                                         // 本次同步确认决定
         DemoWindow window(provider);                                 // 应用拥有的 UI 和运行依赖
+        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
         auto* output = window.findChild<QPlainTextEdit*>("output");  // 模型与工具输出
         auto* status = window.findChild<QLabel*>("status");          // 最终停止状态
         window.findChild<QPushButton*>("send")->click();
@@ -48,6 +50,7 @@ private slots:
     {
         QFETCH(QString, provider);  // 当前真实服务
         DemoWindow window(provider);  // 当前真实应用运行依赖
+        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
         window.findChild<QPushButton*>("send")->click();
         QTRY_VERIFY_WITH_TIMEOUT(!window.findChildren<QMessageBox*>().isEmpty() ||
                                  window.findChild<QLabel*>("status")->text() != "Running", 20000);
@@ -68,6 +71,7 @@ private slots:
     {
         QFETCH(QString, provider);    // 本次真实服务
         DemoWindow window(provider);  // 当前应用运行依赖
+        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
         window.findChild<QCheckBox*>("tools")->setChecked(false);
         window.findChild<QLineEdit*>("input")->setText(
             QStringLiteral("请详细介绍 C++17 的十个特性，每个特性至少五句话。"));
