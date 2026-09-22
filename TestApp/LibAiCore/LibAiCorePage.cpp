@@ -1,10 +1,9 @@
-#include "DemoWindow.h"
+#include "LibAiCorePage.h"
 #include "../../examples/support/DemoSupport.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QTimer>
-#include <QCloseEvent>
 #include <QTextCursor>
 
 namespace {
@@ -85,10 +84,12 @@ bool GuiApproval::requestApproval(const AiLib::ToolCall& call,                  
     result.decision = state->decision;
     return true;
 }
-DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初始 Provider 创建应用 UI 与工具依赖
+LibAiCorePage::LibAiCorePage(
+    QString initialProvider,  // 初始 Provider 标识
+    QWidget* parent)          // 创建核心库测试页面并注册示例工具
+    : QWidget(parent),
+      m_approval(*this)
 {
-    setWindowTitle(QStringLiteral("AiLib · 同步 Agent 示例"));
-    resize(760, 540);
     auto* layout = new QVBoxLayout(this);  // 窗口主布局
     auto* settings = new QHBoxLayout;      // Provider 与运行配置行
     m_provider = new QComboBox(this);
@@ -171,7 +172,7 @@ DemoWindow::DemoWindow(QString initialProvider) : m_approval(*this)  // 按初�
         setBusy(false);
     }
 }
-DemoWindow::~DemoWindow()  // 等待线程后才销毁其借用的工具和确认策略
+LibAiCorePage::~LibAiCorePage()  // 等待线程后才销毁其借用的工具和确认策略
 {
     stop();
     if (m_worker) {
@@ -179,7 +180,7 @@ DemoWindow::~DemoWindow()  // 等待线程后才销毁其借用的工具和确�
         delete m_worker;
     }
 }
-void DemoWindow::setBusy(bool busy)  // 控制应用运行期间可操作的 UI
+void LibAiCorePage::setBusy(bool busy)  // 控制应用运行期间可操作的 UI
 {
     m_busy = busy;
     m_send->setEnabled(!busy);
@@ -192,7 +193,7 @@ void DemoWindow::setBusy(bool busy)  // 控制应用运行期间可操作的 UI
     m_stream->setEnabled(!busy);
     m_input->setEnabled(!busy);
 }
-void DemoWindow::refreshModels()  // 使用当前 Provider 的目录值重建可编辑模型框
+void LibAiCorePage::refreshModels()  // 使用当前 Provider 的目录值重建可编辑模型框
 {
     const QString providerId = m_provider->currentData().toString();  // 当前 Provider 稳定 ID
     const auto entry = AiLib::ModelRegistry::instance().findProvider(providerId);  // Provider 目录副本
@@ -204,26 +205,16 @@ void DemoWindow::refreshModels()  // 使用当前 Provider 的目录值重建可
     if (m_model->count() > 0)
         m_model->setEditText(m_model->itemData(0).toString());
 }
-void DemoWindow::appendText(const QString& text)  // 将新片段追加到输出末尾
+void LibAiCorePage::appendText(const QString& text)  // 将新片段追加到输出末尾
 {
     m_output->moveCursor(QTextCursor::End);
     m_output->insertPlainText(text);
 }
-void DemoWindow::stop()  // UI 线程只设置共享取消状态
+void LibAiCorePage::stop()  // UI 线程只设置共享取消状态
 {
     m_cancel.cancel();
 }
-void DemoWindow::closeEvent(QCloseEvent* event)  // 先停止并等待运行结束，UI 事件循环继续处理确认关闭
-{
-    if (m_busy) {
-        m_closePending = true;
-        stop();
-        event->ignore();
-        return;
-    }
-    QWidget::closeEvent(event);
-}
-void DemoWindow::start()  // 捕获 UI 配置值后启动应用工作线程
+void LibAiCorePage::start()  // 捕获 UI 配置值后启动应用工作线程
 {
     if (m_busy || m_input->text().trimmed().isEmpty())
         return;
@@ -305,8 +296,6 @@ void DemoWindow::start()  // 捕获 UI 配置值后启动应用工作线程
                 m_status->setText(ok ? Demo::finishName(result.finishReason)
                                      : QStringLiteral("Failed · %1").arg(error.code));
                 setBusy(false);
-                if (m_closePending)
-                    close();
             },
             Qt::QueuedConnection);
     });

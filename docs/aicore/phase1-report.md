@@ -11,7 +11,7 @@
 - 实现 CancellationSource/Token 的原子共享取消状态，无线程创建。
 - 实现媒体简单工厂、严格 Base64 和基本来源校验。解析失败不修改 output；合法空输入成功。校验不联网、不读取文件。
 - 添加公共导出宏，Qt Core 和 C++17 依赖传播，SDK 头文件安装。移除空库占位源和 Windows 占位导出。
-- 增加 Qt Test、公共头文件独立编译检查；TestApp 使用一个真实导出 API 作为消费验证。
+- 增加 Qt Test、公共头文件独立编译检查；TestApp 的 LibAiCore 页面使用一个真实导出 API 作为消费验证。
 - tests/support 仅保留 .gitkeep，没有 FakeTransport、临时响应队列或 Transport 模型。
 
 ## 关键接口
@@ -68,7 +68,7 @@ QT_QPA_PLATFORM=offscreen TestApp/bin/Debug/TestApp.app/Contents/MacOS/TestApp
 
 ## 文件变更
 
-修改：CMakeLists.txt、LibAiCore/CMakeLists.txt、README.md、TestApp/src/main.cpp。
+修改：CMakeLists.txt、LibAiCore/CMakeLists.txt、README.md、TestApp/main.cpp。
 
 删除：LibAiCore/src/LibAiCore.cpp（原为空文件）。
 
@@ -99,7 +99,7 @@ QT_QPA_PLATFORM=offscreen TestApp/bin/Debug/TestApp.app/Contents/MacOS/TestApp
 
 新增测试：tests/CMakeLists.txt、tests/support/.gitkeep、tests/unit/tst_PublicModels.cpp、tst_Message.cpp、tst_MediaResource.cpp、tst_Cancellation.cpp。
 
-新增文档：docs/architecture.md、docs/phase1-report.md。
+新增文档：docs/architecture.md、docs/aicore/phase1-report.md。
 
 ## 阶段边界
 

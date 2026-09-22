@@ -7,7 +7,7 @@
 
 本次只完成两项能力：
 
-1. 建立简单的 `Provider -> QList<ModelInfo>` 模型目录，供 TestApp、CLI 和其他调用方列出厂商及其模型；
+1. 建立简单的 `Provider -> QList<ModelInfo>` 模型目录，供 TestApp 的 LibAiCore 页面、CLI 和其他调用方列出厂商及其模型；
 2. 实现 `OpenAIResponses` 协议，使 OpenAI 最新通用模型可用于现有 Client 和 Agent 流程。
 
 首批目录包含：
@@ -89,7 +89,7 @@ std::optional<ModelInfo> findModel(
 
 ### 3.3 内置目录
 
-Registry 机制放在 LibAiCore，厂商数据放在 `examples/support/BuiltinCatalog.{h,cpp}`。内置目录统一提供 DeepSeek、Kimi、OpenAI 条目，TestApp 和 CLI 不再各自硬编码列表。
+Registry 机制放在 LibAiCore，厂商数据放在 `examples/support/BuiltinCatalog.{h,cpp}`。内置目录统一提供 DeepSeek、Kimi、OpenAI 条目，TestApp 的 LibAiCore 页面和 CLI 不再各自硬编码列表。
 
 ## 4. OpenAI Responses Adapter
 
@@ -146,7 +146,7 @@ Adapter 继续使用现有 canonical 类型，不改变 `ChatRequest`、`ChatRes
 
 - 删除 `OfflineTransport`、`offline/demo` 选项及特殊分支；
 - 启动时注册内置目录；
-- TestApp 从 Registry 生成 Provider 和模型选择项；
+- TestApp 的 LibAiCore 页面从 Registry 生成 Provider 和模型选择项；
 - Provider 变化时刷新对应模型列表；
 - 允许在当前 Provider 下手工输入未知 model ID，并提示该模型没有目录能力信息；
 - API Key 输入值优先，空值时回退对应环境变量；
@@ -170,7 +170,7 @@ Adapter 继续使用现有 canonical 类型，不改变 `ChatRequest`、`ChatRes
 4. 为 Factory 增加 `supportsProtocol()` 和 `OpenAIResponses` 分支；
 5. 新增 `ProviderEntry`、`ModelRegistry` 及单元测试；
 6. 新增 `BuiltinCatalog`，迁移 DeepSeek/Kimi 数据并加入 OpenAI 最新模型；
-7. TestApp 和 CLI 改为读取 Registry；
+7. TestApp 的 LibAiCore 页面和 CLI 改为读取 Registry；
 8. 更新架构、示例和协议支持文档；
 9. 运行全部自动化测试与必要的真实协议验收。
 
@@ -200,7 +200,7 @@ Adapter 继续使用现有 canonical 类型，不改变 `ChatRequest`、`ChatRes
 
 ### 7.3 最终验收
 
-- TestApp 可选择 DeepSeek、Kimi 和 OpenAI 的已知模型；
+- TestApp 的 LibAiCore 页面可选择 DeepSeek、Kimi 和 OpenAI 的已知模型；
 - OpenAI 显示 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`；
 - OpenAI 普通、流式及工具调用能通过现有 Client/Agent 流程；
 - 未收录 model ID 可在已注册 Provider 下发起请求；

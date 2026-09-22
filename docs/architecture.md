@@ -30,7 +30,7 @@ Executor 无条件根据输入调用填写 callId / toolName。Handler 只负责
 
 FunctionToolDefinition 仅保存名称、描述、Schema、Never/Always 确认策略、Serialized/Concurrent 并发策略。Handler、执行锁、统计不属于 Definition。Registry 工具条目保存共享执行锁，确认时不持有工具执行锁。Registry 支持多线程只读；涉及修改时调用方负责同步及在途对象生命周期。
 
-第一版只实现本地 Function Tool。MCP 后续作为客户端执行后端，不属于 Provider Builtin Tool；当前不建立 MCP 类型或工具路由抽象。服务端 Builtin Tool 由 Client/Adapter/Provider 协议处理，第一版未支持时明确报 UnsupportedFeature/UnsupportedToolType。
+AiCore 第一版只实现本地 Function Tool，不建立 MCP 类型或工具路由抽象。仓库中的 `LibMcp` 是独立、实验性的 MCP Client/Server 库，当前不与 AiCore 的 Agent 或工具模型耦合；其架构与能力边界见 [LibMcp 架构](libmcp/architecture.md)。服务端 Builtin Tool 由 Client/Adapter/Provider 协议处理，第一版未支持时明确报 UnsupportedFeature/UnsupportedToolType。
 
 ## 媒体资源
 
@@ -103,23 +103,23 @@ StreamSession 只接受 SDK 逻辑 partIndex，按首次出现顺序聚合文本
 实际协议终止标识只存在于具体 Decoder 内。FinishReason、CompletionState 与 SdkError 分离；连接异常、取消、请求超时或缺少完整结束标识均保留有效数据并返回 false + Incomplete + SdkError。自动重试仍未执行，等阶段 7 实现。
 
 
-阶段 4 已实现独立 ToolRegistry / ToolExecutor / ToolHandler / IToolApprovalProvider。执行器采用 bool + ToolResult + SdkError：工具失败保持 true，取消、总截止时间或非法核心调用返回 false；Agent 后续按既定运行语义解释停止信号。ToolExecutionContext 以可选 steady_clock 截止时间传递总预算。参数 Schema 当前是严格校验的显式子集，未支持关键字在注册时拒绝；详见 phase4-report.md。Agent Loop 已在阶段 5 接入，见下节。
+阶段 4 已实现独立 ToolRegistry / ToolExecutor / ToolHandler / IToolApprovalProvider。执行器采用 bool + ToolResult + SdkError：工具失败保持 true，取消、总截止时间或非法核心调用返回 false；Agent 后续按既定运行语义解释停止信号。ToolExecutionContext 以可选 steady_clock 截止时间传递总预算。参数 Schema 当前是严格校验的显式子集，未支持关键字在注册时拒绝；详见 [阶段 4 报告](aicore/phase4-report.md)。Agent Loop 已在阶段 5 接入，见下节。
 
 
 ## 阶段 5 当前实现
 
-最小 Agent 已通过独占 Client、值成员 Executor、应用拥有的 Registry/Approval 完成同步多轮工具闭环。严格白名单、增量消息、工具失败继续决策、完整流结束后执行、Cancelled/Length/MaxTurns/Failed、实例重入保护和 Usage 汇总已接入。实际 Handler 次数上限、工具状态事件及更完整的时间预算细化留到阶段 6；当前 maxToolCalls 非 -1 明确报不支持。秒级请求 timeout 剩余时间向上取整，严格毫秒级预算尚未完成。完整验收及限制见 phase5-report.md。上述阶段性实现不改变前文最终契约。
+最小 Agent 已通过独占 Client、值成员 Executor、应用拥有的 Registry/Approval 完成同步多轮工具闭环。严格白名单、增量消息、工具失败继续决策、完整流结束后执行、Cancelled/Length/MaxTurns/Failed、实例重入保护和 Usage 汇总已接入。实际 Handler 次数上限、工具状态事件及更完整的时间预算细化留到阶段 6；当前 maxToolCalls 非 -1 明确报不支持。秒级请求 timeout 剩余时间向上取整，严格毫秒级预算尚未完成。完整验收及限制见 [阶段 5 报告](aicore/phase5-report.md)。上述阶段性实现不改变前文最终契约。
 
 
 ## 阶段 6 当前实现
 
-Agent 已实现 maxToolCalls 的实际 Handler 次数统计和整批超额停止，所有工具共用 Run 内总额度；拒绝和前置校验失败不消耗额度。AgentRequest.callback 通知 ToolExecutionStarted/Finished，RequestOptions.deadline 传递精确单调时钟总预算，Qt Transport 按更早的尝试/总截止时间中止。阶段 5 的不支持额度和整秒取整限制已解除；前一节仅记录当时状态。单实例并发保护、跨 Agent 并行、停止保留实际结果和增量消息等已验证。未增加 runId 或第二套 CancellationToken。自动重试仍留到阶段 7，详见 phase6-report.md。
+Agent 已实现 maxToolCalls 的实际 Handler 次数统计和整批超额停止，所有工具共用 Run 内总额度；拒绝和前置校验失败不消耗额度。AgentRequest.callback 通知 ToolExecutionStarted/Finished，RequestOptions.deadline 传递精确单调时钟总预算，Qt Transport 按更早的尝试/总截止时间中止。阶段 5 的不支持额度和整秒取整限制已解除；前一节仅记录当时状态。单实例并发保护、跨 Agent 并行、停止保留实际结果和增量消息等已验证。未增加 runId 或第二套 CancellationToken。自动重试仍留到阶段 7，详见 [阶段 6 报告](aicore/phase6-report.md)。
 
 
 ## 阶段 7 当前实现
 
-LLMClient 已实现既定固定间隔重试，网络临时错误、429/5xx 分别按策略开关判断，maxRetries 不含首次请求。Retry-After 优先并保留，秒数及三种 HTTP 日期已统一解析。每次流式尝试创建独立 Decoder/Session，有效输出后不重试；只通知最终流 Error。等待和每次尝试遵守统一 Token/精确 deadline，不增加 Agent 轮数或重复执行工具。此前各节“不执行重试”仅记录当时阶段状态；完整验证见 phase7-report.md。CLI 与 Widgets Demo 尚待阶段 8。
+LLMClient 已实现既定固定间隔重试，网络临时错误、429/5xx 分别按策略开关判断，maxRetries 不含首次请求。Retry-After 优先并保留，秒数及三种 HTTP 日期已统一解析。每次流式尝试创建独立 Decoder/Session，有效输出后不重试；只通知最终流 Error。等待和每次尝试遵守统一 Token/精确 deadline，不增加 Agent 轮数或重复执行工具。此前各节“不执行重试”仅记录当时阶段状态；完整验证见 [阶段 7 报告](aicore/phase7-report.md)。CLI 与 Widgets Demo 尚待阶段 8。
 
 ## 阶段 8 当前实现
 
-CLI 与 Widgets Demo 由应用自行管理线程、确认与历史，并从统一模型目录选择真实 Provider 和模型。GUI 工作线程同步 run，UI 队列更新文本与非模态确认，等待中检查同一取消令牌与截止时间；SDK 不增加 Widgets 或线程创建依赖。示例细节与验证范围见 [示例使用说明](examples.md) 和 [阶段 8 报告](phase8-report.md)。
+CLI 与 Widgets Demo 由应用自行管理线程、确认与历史，并从统一模型目录选择真实 Provider 和模型。GUI 工作线程同步 run，UI 队列更新文本与非模态确认，等待中检查同一取消令牌与截止时间；SDK 不增加 Widgets 或线程创建依赖。示例细节与验证范围见 [示例使用说明](aicore/examples.md) 和 [阶段 8 报告](aicore/phase8-report.md)。

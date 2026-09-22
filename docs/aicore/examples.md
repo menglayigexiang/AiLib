@@ -20,7 +20,7 @@ build/examples/ailib_cli --provider openai --model gpt-5.6-sol --mode agent
 
 Agent 工具确认时：`1` 允许、`2` 拒绝、`3` 取消整个 Run；EOF 或其他输入默认拒绝。拒绝产生 ApprovalDenied ToolResult，模型可继续回答；取消正常结束为 Cancelled。CLI 所有流程在当前线程执行，阻塞式 stdin 无法被取消令牌强制打断；没有增加信号处理或输入线程。
 
-Widgets 程序位于 `TestApp/bin/Debug` 或对应配置目录。macOS 启动 `TestApp.app`；Windows 启动 `TestApp.exe`；Linux 启动 `TestApp`。界面从统一目录提供 Provider 和可编辑模型选择，并默认启用 Streaming 与 add 工具。
+Widgets 程序位于 `TestApp/bin/Debug` 或对应配置目录。macOS 启动 `TestApp.app`；Windows 启动 `TestApp.exe`；Linux 启动 `TestApp`。顶层页签分别承载 LibAiCore 与 LibMcp 页面；LibAiCore 页面从统一目录提供 Provider 和可编辑模型选择，并默认启用 Streaming 与 add 工具。
 
 1. 点击发送或回车，输入和配置被冻结，应用创建工作线程运行同步 Agent。
 2. 模型完整生成 ToolCall 后显示确认弹窗，默认拒绝。Yes/No/Cancel 分别对应 Allow/Deny/Cancel。
@@ -55,13 +55,13 @@ build/examples/ailib_cli --provider openai --model gpt-5.6-sol --mode agent
 
 ## 当前验证范围
 
-macOS Qt 6.11.1/C++17 已编译并通过自动测试；Widgets 使用 offscreen Qt 平台插件进行自动交互测试，并操作实际 macOS 窗口验证 Allow 后得到 42/Completed。Qt 5.15、最低 Qt 6.2、Windows/Linux 尚未实际验证。部署沿用既有 TestApp 规则，本阶段不声称已完成各平台安装包验收。
+macOS Qt 6.11.1/C++17 已编译并通过自动测试；Widgets 使用 offscreen Qt 平台插件进行自动交互测试，并操作实际 macOS 窗口验证 Allow 后得到 42/Completed。Qt 5.15、最低 Qt 6.2、Windows/Linux 尚未实际验证。部署沿用统一 `TestApp` 规则，本阶段不声称已完成各平台安装包验收。
 
 ## 真实服务的代码验收
 
 Widgets 支持 `--provider deepseek` / `--provider kimi` / `--provider openai` 启动配置。真实服务验收优先使用代码断言，不进行逐步 UI 截图。
 
-启用 `AILIB_BUILD_MANUAL_TESTS=ON` 后新增 `manual_agent_acceptance deepseek|kimi` 和 `manual_gui_acceptance`。前者检查确认 Cancel 与有效文本取消后的 Incomplete；后者通过 Qt Test 调用实际 DemoWindow，检查 Allow/Deny、确认等待 Stop 和流式 Stop。两个目标不进入 CTest。macOS/Linux 可用 `QT_QPA_PLATFORM=offscreen build/tests/manual_gui_acceptance` 执行无截图测试。
+启用 `AILIB_BUILD_MANUAL_TESTS=ON` 后新增 `manual_agent_acceptance deepseek|kimi` 和 `manual_gui_acceptance`。前者检查确认 Cancel 与有效文本取消后的 Incomplete；后者通过 Qt Test 调用实际 LibAiCorePage，检查 Allow/Deny、确认等待 Stop 和流式 Stop。两个目标不进入 CTest。macOS/Linux 可用 `QT_QPA_PLATFORM=offscreen build/tests/manual_gui_acceptance` 执行无截图测试。
 
 本次真实结果及 Kimi 工具触发限制见 [真实服务验收报告](live-acceptance-report.md)；不要把首次通过视为全部兼容性已验收通过。
 

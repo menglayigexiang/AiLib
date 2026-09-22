@@ -26,14 +26,13 @@ private:
     QWidget& m_parent;  // 应用拥有的 UI 接收窗口
 };
 
-// 最小应用演示：应用管理历史、工作线程、取消以及同步确认桥接。
-class DemoWindow final : public QWidget {
+// 管理 LibAiCore 历史、工作线程、取消以及同步确认桥接的测试页面。
+class LibAiCorePage final : public QWidget {
 public:
-    explicit DemoWindow(
-        QString initialProvider = QStringLiteral("deepseek"));  // 按初始 Provider 创建表单并注册示例工具
-    ~DemoWindow() override;                              // 取消并等待工作线程后释放 Registry 和 Approval
-protected:
-    void closeEvent(QCloseEvent* event) override;  // 运行中先请求停止，完成后再关闭
+    explicit LibAiCorePage(
+        QString initialProvider = QStringLiteral("deepseek"),  // 初始 Provider 标识
+        QWidget* parent = nullptr);                            // 创建核心库测试页面并注册示例工具
+    ~LibAiCorePage() override;                                 // 取消并等待工作线程后释放依赖
 private:
     void start();                          // 在应用创建的工作线程运行同步 Agent
     void stop();                           // 请求唯一取消来源停止，不强行终止线程
@@ -53,7 +52,6 @@ private:
     QLabel* m_status = nullptr;            // 本轮最终停止原因
     QThread* m_worker = nullptr;           // 应用创建且等待后销毁的工作线程
     bool m_busy = false;                   // 当前是否仍有运行和结果待交付
-    bool m_closePending = false;           // 运行结束后是否关闭窗口
     AiLib::CancellationSource m_cancel;    // 当前 Run 的唯一取消源
     AiLib::ToolRegistry m_registry;        // 应用拥有且运行时只读的工具集合
     GuiApproval m_approval;                // 应用拥有的同步确认策略

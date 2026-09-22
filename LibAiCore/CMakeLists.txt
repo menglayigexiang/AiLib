@@ -1,24 +1,3 @@
-project(LibAiCore VERSION 0.1.0 LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-find_package(Qt6 6.2 QUIET COMPONENTS Core Network)
-if(Qt6_FOUND)
-    set(QT_VERSION_MAJOR 6)
-else()
-    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Network)
-    set(QT_VERSION_MAJOR 5)
-endif()
-
-if(COMMAND qt_standard_project_setup)
-    qt_standard_project_setup()
-else()
-    set(CMAKE_AUTOMOC ON)
-    set(CMAKE_AUTOUIC ON)
-endif()
-include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 
 if(QT_VERSION_MAJOR EQUAL 6)

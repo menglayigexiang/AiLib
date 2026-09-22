@@ -1,6 +1,6 @@
 # 阶段 8：CLI、Qt Widgets Demo 与整体验收
 
-已形成可运行应用闭环。新增 `examples/cli/main.cpp`、`examples/support/DemoSupport.h` 和 examples CMake 目标 ailib_cli；原 TestApp 启动检查替换为最小 Widgets 应用，新增 DemoWindow.h/cpp。公共 SDK 接口和运行时未因 Demo 修改，线程、UI、历史与确认策略仍属于应用层。
+已形成可运行应用闭环。新增 `examples/cli/main.cpp`、`examples/support/DemoSupport.h` 和 examples CMake 目标 ailib_cli；TestApp 的 LibAiCore 页面提供最小 Widgets 应用闭环。公共 SDK 接口和运行时未因 Demo 修改，线程、UI、历史与确认策略仍属于应用层。
 
 ## 本阶段实现
 

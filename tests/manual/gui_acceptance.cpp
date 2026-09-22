@@ -1,4 +1,4 @@
-#include "../../TestApp/src/DemoWindow.h"
+#include "../../TestApp/LibAiCore/LibAiCorePage.h"
 #include "../../examples/support/DemoSupport.h"
 #include <QtTest>
 #include <QMessageBox>
@@ -20,16 +20,16 @@ private slots:
     {
         QFETCH(QString, provider);                                   // 本次真实服务
         QFETCH(bool, allow);                                         // 本次同步确认决定
-        DemoWindow window(provider);                                 // 应用拥有的 UI 和运行依赖
-        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
-        auto* output = window.findChild<QPlainTextEdit*>("output");  // 模型与工具输出
-        auto* status = window.findChild<QLabel*>("status");          // 最终停止状态
-        window.findChild<QPushButton*>("send")->click();
-        QTRY_VERIFY_WITH_TIMEOUT(!window.findChildren<QMessageBox*>().isEmpty() ||
-                                 window.findChild<QLabel*>("status")->text() != "Running", 20000);
-        QVERIFY2(!window.findChildren<QMessageBox*>().isEmpty(),
-                 qPrintable(window.findChild<QLabel*>("status")->text()));
-        auto* box = window.findChildren<QMessageBox*>().first();  // 已实际触发的工具确认
+        LibAiCorePage page(provider);                               // 应用拥有的 UI 和运行依赖
+        page.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
+        auto* output = page.findChild<QPlainTextEdit*>("output");  // 模型与工具输出
+        auto* status = page.findChild<QLabel*>("status");          // 最终停止状态
+        page.findChild<QPushButton*>("send")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!page.findChildren<QMessageBox*>().isEmpty() ||
+                                 page.findChild<QLabel*>("status")->text() != "Running", 20000);
+        QVERIFY2(!page.findChildren<QMessageBox*>().isEmpty(),
+                 qPrintable(page.findChild<QLabel*>("status")->text()));
+        auto* box = page.findChildren<QMessageBox*>().first();  // 已实际触发的工具确认
         QVERIFY(box->text().contains("widgets-agent"));
         QVERIFY(box->text().contains("add"));
         QVERIFY(!box->isModal());
@@ -49,17 +49,17 @@ private slots:
     void approvalStop()  // 实际确认等待中点击 Stop，验证 UI 桥接使用同一取消令牌
     {
         QFETCH(QString, provider);  // 当前真实服务
-        DemoWindow window(provider);  // 当前真实应用运行依赖
-        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
-        window.findChild<QPushButton*>("send")->click();
-        QTRY_VERIFY_WITH_TIMEOUT(!window.findChildren<QMessageBox*>().isEmpty() ||
-                                 window.findChild<QLabel*>("status")->text() != "Running", 20000);
-        QVERIFY2(!window.findChildren<QMessageBox*>().isEmpty(),
-                 qPrintable(window.findChild<QLabel*>("status")->text()));
-        window.findChild<QPushButton*>("stop")->click();
-        QTRY_COMPARE_WITH_TIMEOUT(window.findChild<QLabel*>("status")->text(), QStringLiteral("Cancelled"), 5000);
-        QVERIFY(window.findChild<QPlainTextEdit*>("output")->toPlainText().contains(QStringLiteral("Handler=未执行")));
-        QTRY_VERIFY_WITH_TIMEOUT(window.findChildren<QMessageBox*>().isEmpty(), 1000);
+        LibAiCorePage page(provider);  // 当前真实应用运行依赖
+        page.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
+        page.findChild<QPushButton*>("send")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!page.findChildren<QMessageBox*>().isEmpty() ||
+                                 page.findChild<QLabel*>("status")->text() != "Running", 20000);
+        QVERIFY2(!page.findChildren<QMessageBox*>().isEmpty(),
+                 qPrintable(page.findChild<QLabel*>("status")->text()));
+        page.findChild<QPushButton*>("stop")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(page.findChild<QLabel*>("status")->text(), QStringLiteral("Cancelled"), 5000);
+        QVERIFY(page.findChild<QPlainTextEdit*>("output")->toPlainText().contains(QStringLiteral("Handler=未执行")));
+        QTRY_VERIFY_WITH_TIMEOUT(page.findChildren<QMessageBox*>().isEmpty(), 1000);
     }
     void streamStop_data()  // 两种服务在有效文字输出后取消
     {
@@ -70,17 +70,17 @@ private slots:
     void streamStop()  // UI 线程请求 Stop，不通过截图判断部分文字与取消状态
     {
         QFETCH(QString, provider);    // 本次真实服务
-        DemoWindow window(provider);  // 当前应用运行依赖
-        window.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
-        window.findChild<QCheckBox*>("tools")->setChecked(false);
-        window.findChild<QLineEdit*>("input")->setText(
+        LibAiCorePage page(provider);  // 当前应用运行依赖
+        page.findChild<QLineEdit*>("apiKey")->setText(Demo::demoApiKeyFromEnv(provider));
+        page.findChild<QCheckBox*>("tools")->setChecked(false);
+        page.findChild<QLineEdit*>("input")->setText(
             QStringLiteral("请详细介绍 C++17 的十个特性，每个特性至少五句话。"));
-        auto* output = window.findChild<QPlainTextEdit*>("output");  // 当前已显示的有效文字
-        window.findChild<QPushButton*>("send")->click();
+        auto* output = page.findChild<QPlainTextEdit*>("output");  // 当前已显示的有效文字
+        page.findChild<QPushButton*>("send")->click();
         const auto baseline = output->toPlainText().size();  // 仅用户输入和展示标签的长度
         QTRY_VERIFY_WITH_TIMEOUT(output->toPlainText().size() > baseline + 5, 20000);
-        window.findChild<QPushButton*>("stop")->click();
-        QTRY_COMPARE_WITH_TIMEOUT(window.findChild<QLabel*>("status")->text(),
+        page.findChild<QPushButton*>("stop")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(page.findChild<QLabel*>("status")->text(),
                                   QStringLiteral("Cancelled"), 5000);
         QVERIFY(output->toPlainText().size() > baseline + 5);
     }

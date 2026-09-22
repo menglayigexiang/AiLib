@@ -3,7 +3,7 @@
 ## 模块
 
 ```text
-Application / LibMcpTestApp
+Application / TestApp / LibMcpPage
         |
         +-- McpClientManager
         +-- McpClient
@@ -79,12 +79,12 @@ MCP Session ID、JSON 响应和通知的 HTTP 202 响应。
 - 应用移动 Client/Server 时，应保证其 Transport 与所有者位于同一线程。
 - GUI 线程不得同步阻塞等待网络 Future。
 
-## TestApp
+## TestApp 的 LibMcp 页面
 
-TestApp 位于 `test/testapp`，只使用 LibMcp 公共 API：
+LibMcpPage 位于 `TestApp/LibMcp`，只使用 LibMcp 公共 API：
 
 - Client 页面管理 Streamable HTTP MCP 地址并连接外部 Server。
 - Server 页面配置监听 IP、端口和路径，启动本地 MCP Server。
 - Log 页面显示启动、连接及错误信息。
 
-自动验证不操作 TestApp 界面；TestApp 只参与命令行编译和链接检查。
+自动验证不操作 LibMcp 页面；统一 TestApp 参与命令行编译和链接检查。

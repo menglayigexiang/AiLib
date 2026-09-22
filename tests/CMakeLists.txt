@@ -1,5 +1,9 @@
 project(AiLibTests LANGUAGES CXX)
 
+if(AILIB_BUILD_MCP)
+    add_subdirectory(libmcp)
+endif()
+
 get_target_property(QT_VERSION_MAJOR AiLib::Core AILIB_QT_MAJOR)
 if(QT_VERSION_MAJOR EQUAL 6)
     find_package(Qt6 6.2 REQUIRED COMPONENTS Test Network)
@@ -79,20 +83,39 @@ if(AILIB_BUILD_MANUAL_TESTS)
 endif()
 
 # 示例层线程与 UI 桥接测试；Qt Widgets 不进入 SDK 依赖。
+set(demo_test_sources
+    unit/tst_Demo.cpp
+    ../TestApp/MainWindow.cpp
+    ../TestApp/MainWindow.h
+    ../TestApp/LogWidget.cpp
+    ../TestApp/LogWidget.h
+    ../TestApp/LibAiCore/LibAiCorePage.cpp
+    ../TestApp/LibAiCore/LibAiCorePage.h
+)
+
+if(AILIB_BUILD_MCP)
+    list(APPEND demo_test_sources
+        ../TestApp/LibMcp/LibMcpPage.cpp
+        ../TestApp/LibMcp/LibMcpPage.h
+    )
+endif()
+
 if(QT_VERSION_MAJOR EQUAL 6)
     find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
-    qt_add_executable(tst_Demo unit/tst_Demo.cpp
-        ../TestApp/src/DemoWindow.cpp ../TestApp/src/DemoWindow.h)
+    qt_add_executable(tst_Demo ${demo_test_sources})
 else()
     find_package(Qt5 5.15 REQUIRED COMPONENTS Widgets)
-    add_executable(tst_Demo unit/tst_Demo.cpp
-        ../TestApp/src/DemoWindow.cpp ../TestApp/src/DemoWindow.h)
+    add_executable(tst_Demo ${demo_test_sources})
 endif()
 set_target_properties(tst_Demo PROPERTIES AUTOMOC ON)
 add_dependencies(tst_Demo ailib_cli)
 target_compile_definitions(tst_Demo PRIVATE AILIB_CLI_PATH="$<TARGET_FILE:ailib_cli>")
 target_link_libraries(tst_Demo PRIVATE AiLib::Core Qt${QT_VERSION_MAJOR}::Test Qt${QT_VERSION_MAJOR}::Widgets)
 target_link_libraries(tst_Demo PRIVATE ailib_demo_support)
+if(AILIB_BUILD_MCP)
+    target_compile_definitions(tst_Demo PRIVATE AILIB_TESTAPP_HAS_MCP)
+    target_link_libraries(tst_Demo PRIVATE LibMcp::LibMcp)
+endif()
 if(WIN32)
     add_custom_command(TARGET tst_Demo POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -106,10 +129,12 @@ set_tests_properties(WidgetsDemo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscre
 if(AILIB_BUILD_MANUAL_TESTS)
     if(QT_VERSION_MAJOR EQUAL 6)
         qt_add_executable(manual_gui_acceptance manual/gui_acceptance.cpp
-            ../TestApp/src/DemoWindow.cpp ../TestApp/src/DemoWindow.h)
+            ../TestApp/LibAiCore/LibAiCorePage.cpp
+            ../TestApp/LibAiCore/LibAiCorePage.h)
     else()
         add_executable(manual_gui_acceptance manual/gui_acceptance.cpp
-            ../TestApp/src/DemoWindow.cpp ../TestApp/src/DemoWindow.h)
+            ../TestApp/LibAiCore/LibAiCorePage.cpp
+            ../TestApp/LibAiCore/LibAiCorePage.h)
     endif()
     set_target_properties(manual_gui_acceptance PROPERTIES AUTOMOC ON)
     target_link_libraries(manual_gui_acceptance PRIVATE AiLib::Core ailib_demo_support Qt${QT_VERSION_MAJOR}::Test Qt${QT_VERSION_MAJOR}::Widgets)

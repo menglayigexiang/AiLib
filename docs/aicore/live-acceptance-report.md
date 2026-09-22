@@ -35,7 +35,7 @@ SDK 当前正确保留了实际纯文本回复并正常 Completed；不把文字
 ## 本次代码与规则调整
 
 - 新增 `tests/manual/agent_acceptance.cpp`：验证真实确认 Cancel、关联 ID、Handler 未执行，以及有效流式文本取消后的 Incomplete 增量消息。Specific 只用于 Cancel 场景，不进入下一轮，不改变普通 Agent 的 Auto 选择语义。
-- 新增 `tests/manual/gui_acceptance.cpp`：Qt Test 直接验证实际 DemoWindow 的同步确认、工具结果、网络取消和线程生命周期；不截图，不依赖外部 UI 自动控制。
+- 新增 `tests/manual/gui_acceptance.cpp`：Qt Test 直接验证实际 LibAiCorePage 的同步确认、工具结果、网络取消和线程生命周期；不截图，不依赖外部 UI 自动控制。
 - 两个手动目标由 `AILIB_BUILD_MANUAL_TESTS` 开关控制，不注册到 CTest，自动回归不使用真实 Key。
 - Widgets 支持 `--provider offline/deepseek/kimi` 启动选项，便于配置测试进程；不接受命令行凭据。Ready 状态显示实际初始 Provider，修复指定真实 Provider 时仍提示“默认离线”的展示问题。
 - AGENTS.md 新增优先代码分析与测试、尽量不用 UI 截图的规则。用户提出该要求后，停止原生截图操作，剩余 GUI 验收改为 Qt Test 代码断言。
