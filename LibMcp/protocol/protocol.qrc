@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/libmcp/protocol">
+        <file alias="mcp-2026-07-28.schema.json">mcp-2026-07-28.schema.json</file>
+    </qresource>
+</RCC>

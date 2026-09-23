@@ -21,7 +21,7 @@ QFuture<McpResult<McpReadResourceResult>> readResource(
 
 两个列表接口在内部自动处理全部分页。`readResource()` 返回完整强类型结果，不能只返回 `QString` 或 `QByteArray`，否则会丢失多内容项、每项 URI、MIME 类型、二进制内容和 `_meta`。
 
-资源变化订阅属于协议的可选能力，2026-07-28 使用统一的 `subscriptions/listen`，不再使用旧的 `resources/subscribe` / `resources/unsubscribe`。第一阶段可以正确建模并声明能力，但把订阅管理器后置；这不影响资源列表和读取的基础互操作。
+资源变化订阅属于协议的可选能力，2026-07-28 使用统一的 `subscriptions/listen`，不再使用旧的 `resources/subscribe` / `resources/unsubscribe`。当前实现已经提供长寿命订阅、资源过滤、取消和最终结果，不保留旧式订阅入口。
 
 ## 依据与范围
 
@@ -501,4 +501,3 @@ struct ListResourcesPage
 - `input_required` 结果交给 MRTR 层而非报 InvalidResponse。
 - 未声明 resources 能力时 Client 不发资源请求。
 - 外部 Server 返回顺序在 Client 侧保持不变。
-

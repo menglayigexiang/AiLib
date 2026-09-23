@@ -25,13 +25,6 @@ McpError invalidResponse(const QString &message)
 
 } // namespace
 
-QJsonObject requestMeta()
-{
-    return {
-        {QStringLiteral("io.modelcontextprotocol/protocolVersion"),
-         QStringLiteral(LIBMCP_PROTOCOL_VERSION)}};
-}
-
 QJsonObject encodeTool(const McpTool &tool)
 {
     QJsonObject object{{QStringLiteral("name"), tool.name},

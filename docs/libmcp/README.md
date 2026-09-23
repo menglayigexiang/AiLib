@@ -1,72 +1,37 @@
 # LibMcp
 
-LibMcp 是一个使用 C++17 和 Qt 构建的实验性 MCP Client/Server 库。工程支持
-Qt 5.15 和 Qt 6.2+，并提供一个按需构建的 Qt Widgets 测试应用。
+LibMcp 是一个 C++17、Qt 5.15/Qt 6.2+ 的 MCP Client/Server 动态库，只实现
+MCP `2026-07-28`。它不包含旧版初始化握手、协议级 Session 或版本兼容层。
 
-## 已提供的功能
+## 已实现能力
 
-- `McpResult<T>` 与统一错误模型。
-- JSON-RPC 请求、响应、通知、超时和连接关闭处理。
-- MCP 初始化与能力发现。
-- Tools、Resources、Resource Templates 和 Prompts。
-- 列表请求自动 cursor 分页，包含循环与最大页数保护。
-- Streamable HTTP Client/Server Transport。
-- 用于单元测试的内存 Transport。
-- `McpClientManager` 配置集合及 JSON 序列化/事务式反序列化。
-- 统一 Qt Widgets `TestApp` 中的 LibMcp 页面，可连接远端 MCP 或启动本地 MCP Server。
+- 每个请求携带协议版本、ClientInfo 和 ClientCapabilities 的无状态协议模型。
+- Tools、Resources、Resource Templates、Prompts、Completion 和自动 cursor 分页。
+- Tool input/output JSON Schema 2020-12 注册与运行时校验。
+- MRTR `input_required`、请求内 Progress、`subscriptions/listen` 和取消。
+- STDIO 与无状态 Streamable HTTP；HTTP 支持请求级 SSE 增量事件。
+- `QSharedPointer<McpOperation<T>>` 异步结果、进度、输入请求和取消。
+- 内存 Transport、真实 STDIO 子进程测试和本地 HTTP 协议测试。
+- TestApp Client 配置列表、添加/编辑表单、连接开关和 Server 运行观测。
 
-## 构建
+官方 Schema 固定保存在 `LibMcp/protocol/mcp-2026-07-28.schema.json`。普通构建
+不下载协议文件，也不运行代码生成器。jsoncons 作为 LibMcp 私有的 header-only
+源码依赖，不产生额外库，也不进入公共 API。
 
-```powershell
-cmake -S . -B build -G Ninja `
-  -DCMAKE_PREFIX_PATH="E:/Qt/installer/6.11.2/mingw_64"
+## 构建与测试
+
+```sh
+cmake -S . -B build -G Ninja -DAILIB_BUILD_MCP=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Qt 5.15 使用对应 Kit 的 `CMAKE_PREFIX_PATH` 即可。LibMcp 固定构建为动态库，
-可通过顶层选项关闭或开启人工测试应用：
+LibMcp 固定构建为动态库。测试只使用代码、Qt Test、本地 HTTP、受控子进程和
+协议消息，不依赖截图或视频分析。
 
-```powershell
-cmake -S . -B build -DAILIB_BUILD_MCP=ON
-```
+公共异步 API 返回 `QSharedPointer<McpOperation<T>>`。调用方可连接 `finished`、
+`progressChanged`、`inputRequired` 信号，并在完成后继续读取状态、结果或错误。
 
-## 最小 Server 示例
-
-```cpp
-auto transport = std::make_unique<LibMcp::StreamableHttpServerTransport>(
-    QHostAddress::LocalHost, 8080, QStringLiteral("/mcp"));
-
-LibMcp::McpServer server(
-    std::move(transport),
-    {QStringLiteral("example"), QStringLiteral("1.0.0"), QStringLiteral("Example")});
-
-LibMcp::McpTool echo;
-echo.name = QStringLiteral("echo");
-echo.inputSchema = {
-    {QStringLiteral("type"), QStringLiteral("object")}
-};
-
-server.addTool(echo, [](const QJsonArray &input) {
-    return input;
-});
-
-server.start();
-```
-
-## 最小 Client 示例
-
-```cpp
-auto transport = std::make_unique<LibMcp::StreamableHttpClientTransport>(
-    QUrl(QStringLiteral("http://127.0.0.1:8080/mcp")));
-
-LibMcp::McpClient client(std::move(transport));
-
-auto startFuture = client.start();
-auto toolsFuture = client.listTools();
-```
-
-公共异步 API 返回 `QFuture<McpResult<T>>`，可以使用 `QFutureWatcher` 接收完成结果。
-不要在 GUI 线程中阻塞等待 Future。
-
-架构及模块职责参见 [architecture.md](architecture.md)。
+详细边界见 [架构说明](architecture.md) 和
+[MCP 2026-07-28 设计文档](mcp-2026-07-28-design.md)。官方 SDK 的四向实测结果见
+[互操作验证](interoperability.md)。

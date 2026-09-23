@@ -72,7 +72,8 @@ QFuture<McpResult<void>> InMemoryServerTransport::stop()
 }
 
 QFuture<McpResult<void>> InMemoryServerTransport::sendMessage(
-    const McpSessionId &, const QJsonObject &message)
+    const McpTransportRequestId&,  // 内存传输只有一个配对端，无需使用请求标识
+    const QJsonObject& message)    // 需要发送给配对 Client 的完整消息
 {
     if (!m_running || !m_peer) {
         return readyFuture(McpResult<void>::failure(

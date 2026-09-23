@@ -1,140 +1,362 @@
 #include "LibMcpPage.h"
 
+#include "McpClientConfigDialog.h"
+
 #include <LibMcp/StreamableHttpTransport.h>
 
+#include <QCheckBox>
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QFile>
 #include <QFormLayout>
 #include <QFutureWatcher>
+#include <QHeaderView>
 #include <QHostAddress>
+#include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QLabel>
 #include <QLineEdit>
 #include <QLoggingCategory>
+#include <QMessageBox>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSpinBox>
+#include <QStandardPaths>
+#include <QTableWidget>
 #include <QTabWidget>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 using namespace LibMcp;
 
 Q_LOGGING_CATEGORY(lcLibMcpPage, "TestApp.LibMcp")  // 标识 LibMcp 测试页面产生的日志
 
-LibMcpPage::LibMcpPage(QWidget *parent)  // 创建 MCP 测试页面，parent 为可选父控件
+LibMcpPage::LibMcpPage(QWidget* parent)  // 创建 Client 与 Server 测试页
     : QWidget(parent)
 {
-    auto *layout = new QVBoxLayout(this);                // 填满统一 TestApp 的 LibMcp 页签
-    auto *tabs = new QTabWidget(this);                   // 承载客户端和服务端页面
-    auto *clientPage = new QWidget(tabs);                // 承载远端客户端配置控件
-    auto *clientLayout = new QFormLayout(clientPage);    // 排列客户端配置字段与操作按钮
-    m_clientId = new QLineEdit(QStringLiteral("remote"), clientPage);
-    m_clientUrl = new QLineEdit(QStringLiteral("http://127.0.0.1:8080/mcp"), clientPage);
-    auto *saveClient =                                      // 保存客户端配置的操作按钮
-        new QPushButton(QStringLiteral("保存配置"), clientPage);
-    auto *connectClient =                                   // 连接客户端并列出工具的操作按钮
-        new QPushButton(QStringLiteral("连接并列出工具"), clientPage);
-    clientLayout->addRow(QStringLiteral("配置 ID"), m_clientId);
-    clientLayout->addRow(QStringLiteral("MCP URL"), m_clientUrl);
-    clientLayout->addRow(saveClient);
-    clientLayout->addRow(connectClient);
-
-    auto *serverPage = new QWidget(tabs);              // 承载本地服务端配置控件
-    auto *serverLayout = new QFormLayout(serverPage);  // 排列服务端配置字段与启动按钮
-    m_serverAddress = new QLineEdit(QStringLiteral("127.0.0.1"), serverPage);
-    m_serverPort = new QSpinBox(serverPage);
-    m_serverPort->setRange(1, 65535);
-    m_serverPort->setValue(8080);
-    m_serverPath = new QLineEdit(QStringLiteral("/mcp"), serverPage);
-    auto *startServer =  // 启动本地 MCP 服务端的操作按钮
-        new QPushButton(QStringLiteral("启动 Server"), serverPage);
-    serverLayout->addRow(QStringLiteral("监听 IP"), m_serverAddress);
-    serverLayout->addRow(QStringLiteral("端口"), m_serverPort);
-    serverLayout->addRow(QStringLiteral("路径"), m_serverPath);
-    serverLayout->addRow(startServer);
-
-    tabs->addTab(clientPage, QStringLiteral("Client"));
-    tabs->addTab(serverPage, QStringLiteral("Server"));
+    auto* layout = new QVBoxLayout(this);  // 填满统一 TestApp 的 LibMcp 页签
+    auto* tabs = new QTabWidget(this);  // 承载 Client 配置和 Server 观测页面
+    tabs->setObjectName(QStringLiteral("mcpTabs"));
+    tabs->addTab(createClientPage(), QStringLiteral("Client"));
+    tabs->addTab(createServerPage(), QStringLiteral("Server"));
     layout->addWidget(tabs);
-
-    connect(saveClient, &QPushButton::clicked,
-            this, &LibMcpPage::addClientConfiguration);
-    connect(connectClient, &QPushButton::clicked,
-            this, &LibMcpPage::connectConfiguredClient);
-    connect(startServer, &QPushButton::clicked,
-            this, &LibMcpPage::startLocalServer);
-}
-
-void LibMcpPage::connectConfiguredClient()  // 连接选定客户端并显示远端工具列表
-{
-    const QString id = m_clientId->text().trimmed();  // 当前需要连接的客户端配置 ID
-    if (!m_clientManager.client(id)) {
-        addClientConfiguration();
-    }
-
-    auto *startWatcher =  // 监视客户端异步启动结果
-        new QFutureWatcher<McpResult<void>>(this);
-    connect(startWatcher,
-            &QFutureWatcher<McpResult<void>>::finished,
+    connect(&m_clientManager,
+            &McpClientManager::configsChanged,
             this,
-            [this, id, startWatcher] {  // 启动完成后继续请求远端工具列表
-                const McpResult<void> startResult =  // 保存客户端启动结果
-                    startWatcher->result();
-                startWatcher->deleteLater();
-                if (startResult.isError()) {
-                    qCWarning(lcLibMcpPage).noquote()
-                        << QStringLiteral("连接失败：%1")
-                               .arg(startResult.error().message);
-                    return;
-                }
-
-                McpClient *client = m_clientManager.client(id);  // 获取已经启动的客户端实例
-                auto *toolsWatcher =                             // 监视工具列表异步查询结果
-                    new QFutureWatcher<McpResult<QList<McpTool>>>(this);
-                connect(toolsWatcher,
-                        &QFutureWatcher<McpResult<QList<McpTool>>>::finished,
-                        this,
-                        [this, toolsWatcher] {  // 查询完成后输出工具或错误信息
-                            const auto result =  // 保存工具列表查询结果
-                                toolsWatcher->result();
-                            toolsWatcher->deleteLater();
-                            if (result.isError()) {
-                                qCWarning(lcLibMcpPage).noquote()
-                                    << QStringLiteral("获取工具失败：%1")
-                                           .arg(result.error().message);
-                                return;
-                            }
-                            qCInfo(lcLibMcpPage).noquote()
-                                << QStringLiteral("连接成功，共发现 %1 个工具")
-                                       .arg(result.value().size());
-                            for (const McpTool &tool : result.value()) {  // 逐项输出远端工具名称
-                                qCInfo(lcLibMcpPage).noquote()
-                                    << QStringLiteral("  - %1").arg(tool.name);
-                            }
-                        });
-                toolsWatcher->setFuture(client->listTools());
+            [this] {  // 配置变更后同步表格和持久化文件
+                refreshClientTable();
+                saveConfigurations();
             });
-    startWatcher->setFuture(m_clientManager.startClient(id));
+    loadConfigurations();
+    refreshClientTable();
+    updateServerControls();
 }
 
-void LibMcpPage::addClientConfiguration()  // 保存界面填写的远端客户端配置
+QWidget* LibMcpPage::createClientPage()  // 创建 Client 列表与添加入口
 {
-    McpClientConfig config;  // 汇总界面填写的客户端连接信息
-    config.id = m_clientId->text().trimmed();
-    config.name = config.id;
-    config.transportType = QStringLiteral("streamable-http");
-    config.transportConfig = {{QStringLiteral("url"), m_clientUrl->text().trimmed()}};
-    if (m_clientManager.addConfig(config)) {
-        qCInfo(lcLibMcpPage) << "Client 配置已保存";
-    } else {
-        qCWarning(lcLibMcpPage) << "Client 配置保存失败";
-    }
+    auto* page = new QWidget(this);  // 承载 Client 配置列表
+    auto* layout = new QVBoxLayout(page);  // 按工具栏和表格排列 Client 页面
+    auto* toolbar = new QHBoxLayout();  // 将说明文本与主要操作分置两端
+    auto* title = new QLabel(QStringLiteral("MCP Client 配置"), page);  // Client 页面标题
+    auto* addButton = new QPushButton(QStringLiteral("添加"), page);  // 打开新增配置对话框
+    addButton->setObjectName(QStringLiteral("addMcpClientButton"));
+    toolbar->addWidget(title);
+    toolbar->addStretch();
+    toolbar->addWidget(addButton);
+    layout->addLayout(toolbar);
+
+    m_clientTable = new QTableWidget(0, 5, page);
+    m_clientTable->setObjectName(QStringLiteral("mcpClientTable"));
+    m_clientTable->setHorizontalHeaderLabels(
+        {QStringLiteral("名称"),
+         QStringLiteral("类型"),
+         QStringLiteral("参数"),
+         QStringLiteral("状态"),
+         QStringLiteral("操作")});
+    m_clientTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    m_clientTable->verticalHeader()->setVisible(false);
+    m_clientTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_clientTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layout->addWidget(m_clientTable, 1);
+    connect(addButton, &QPushButton::clicked, this, [this] { addClient(); });
+    return page;
 }
 
-void LibMcpPage::startLocalServer()  // 启动界面配置的本地 MCP 服务端
+QWidget* LibMcpPage::createServerPage()  // 创建 Server 状态、统计和请求列表
 {
-    if (m_server) {
-        qCInfo(lcLibMcpPage) << "Server 已经启动";
+    auto* page = new QWidget(this);  // 承载无状态 Server 控件
+    auto* layout = new QVBoxLayout(page);  // 按配置、状态、统计和最近请求排列内容
+    auto* endpointForm = new QFormLayout();  // 排列 Server Endpoint 配置字段
+    m_serverAddress = new QLineEdit(QStringLiteral("127.0.0.1"), page);
+    m_serverAddress->setObjectName(QStringLiteral("mcpServerAddressEdit"));
+    m_serverPort = new QSpinBox(page);
+    m_serverPort->setObjectName(QStringLiteral("mcpServerPortSpin"));
+    m_serverPort->setRange(0, 65535);
+    m_serverPort->setValue(8080);
+    m_serverPath = new QLineEdit(QStringLiteral("/mcp"), page);
+    m_serverPath->setObjectName(QStringLiteral("mcpServerPathEdit"));
+    endpointForm->addRow(QStringLiteral("监听 IP"), m_serverAddress);
+    endpointForm->addRow(QStringLiteral("端口"), m_serverPort);
+    endpointForm->addRow(QStringLiteral("路径"), m_serverPath);
+    layout->addLayout(endpointForm);
+
+    auto* actions = new QHBoxLayout();  // 排列启动和停止操作
+    m_startServer = new QPushButton(QStringLiteral("启动 Server"), page);
+    m_startServer->setObjectName(QStringLiteral("startMcpServerButton"));
+    m_stopServer = new QPushButton(QStringLiteral("停止 Server"), page);
+    m_stopServer->setObjectName(QStringLiteral("stopMcpServerButton"));
+    actions->addWidget(m_startServer);
+    actions->addWidget(m_stopServer);
+    actions->addStretch();
+    layout->addLayout(actions);
+
+    auto* statusForm = new QFormLayout();  // 显示 Server 最终状态和固定协议信息
+    m_serverStatus = new QLabel(page);
+    m_serverStatus->setObjectName(QStringLiteral("mcpServerStatusLabel"));
+    m_serverEndpoint = new QLabel(page);
+    m_protocolVersion = new QLabel(QStringLiteral(LIBMCP_PROTOCOL_VERSION), page);
+    statusForm->addRow(QStringLiteral("状态"), m_serverStatus);
+    statusForm->addRow(QStringLiteral("Endpoint"), m_serverEndpoint);
+    statusForm->addRow(QStringLiteral("协议版本"), m_protocolVersion);
+    layout->addLayout(statusForm);
+
+    auto* metrics = new QHBoxLayout();  // 横向显示核心无状态请求指标
+    m_activeRequests = new QLabel(QStringLiteral("Active Requests: 0"), page);
+    m_totalRequests = new QLabel(QStringLiteral("总请求: 0"), page);
+    m_successRequests = new QLabel(QStringLiteral("成功: 0"), page);
+    m_protocolErrors = new QLabel(QStringLiteral("协议错误: 0"), page);
+    m_transportErrors = new QLabel(QStringLiteral("Transport 错误: 0"), page);
+    metrics->addWidget(m_activeRequests);
+    metrics->addWidget(m_totalRequests);
+    metrics->addWidget(m_successRequests);
+    metrics->addWidget(m_protocolErrors);
+    metrics->addWidget(m_transportErrors);
+    metrics->addStretch();
+    layout->addLayout(metrics);
+
+    m_recentRequests = new QTableWidget(0, 5, page);
+    m_recentRequests->setObjectName(QStringLiteral("mcpRecentRequestsTable"));
+    m_recentRequests->setHorizontalHeaderLabels(
+        {QStringLiteral("ClientInfo"),
+         QStringLiteral("Method"),
+         QStringLiteral("开始时间"),
+         QStringLiteral("耗时"),
+         QStringLiteral("结果")});
+    m_recentRequests->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_recentRequests->verticalHeader()->setVisible(false);
+    m_recentRequests->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layout->addWidget(m_recentRequests, 1);
+    connect(m_startServer, &QPushButton::clicked, this, [this] { startServer(); });
+    connect(m_stopServer, &QPushButton::clicked, this, [this] { stopServer(); });
+    return page;
+}
+
+void LibMcpPage::addClient()  // 打开空白配置对话框并新增 Client
+{
+    McpClientConfigDialog dialog(this);  // 收集新的 Client 配置
+    if (dialog.exec() != QDialog::Accepted) {
         return;
     }
+    if (!m_clientManager.addConfig(dialog.configuration())) {
+        QMessageBox::warning(this,
+                             QStringLiteral("无法添加"),
+                             QStringLiteral("Client 名称为空或已经存在。"));
+    }
+}
 
-    auto transport =  // 创建按界面参数监听的 Streamable HTTP 服务端传输
-        std::make_unique<StreamableHttpServerTransport>(
+void LibMcpPage::editClient(const QString& id)  // 编辑指定未连接 Client
+{
+    const QList<McpClientConfig> configs = m_clientManager.configs();  // 获取当前配置快照
+    auto iterator = std::find_if(
+        configs.cbegin(),
+        configs.cend(),
+        [&id](const McpClientConfig& config) { return config.id == id; });  // 查找指定配置
+    if (iterator == configs.cend()) {
+        return;
+    }
+    McpClientConfigDialog dialog(this);  // 复用新增表单编辑现有配置
+    dialog.setConfiguration(*iterator);
+    if (dialog.exec() == QDialog::Accepted
+        && !m_clientManager.updateConfig(id, dialog.configuration())) {
+        QMessageBox::warning(this,
+                             QStringLiteral("无法保存"),
+                             QStringLiteral("请先断开 Client，并确保名称不重复。"));
+    }
+}
+
+void LibMcpPage::removeClient(const QString& id)  // 确认并删除指定未连接 Client
+{
+    if (QMessageBox::question(
+            this,
+            QStringLiteral("删除 MCP Client"),
+            QStringLiteral("确定删除“%1”吗？").arg(id))
+        != QMessageBox::Yes) {
+        return;
+    }
+    if (!m_clientManager.removeConfig(id)) {
+        QMessageBox::warning(this,
+                             QStringLiteral("无法删除"),
+                             QStringLiteral("请先断开该 Client。"));
+    }
+}
+
+void LibMcpPage::setClientConnected(
+    const QString& id,  // 需要切换连接状态的 Client ID
+    bool connected)    // true 连接，false 断开
+{                      // 发起连接状态切换并在结束后刷新表格
+    const QSharedPointer<McpOperation<void>> operation = connected
+        ? m_clientManager.startClient(id)
+        : m_clientManager.stopClient(id);  // 保存本次连接或断开操作
+    m_operations.insert(operation.data(), operation);
+    const auto finishOperation = [this, id, connected, operation] {  // 统一收敛同步与异步完成的连接操作
+        QObject::disconnect(operation.data(), nullptr, this, nullptr);
+        m_operations.remove(operation.data());
+        if (operation->status() != McpOperationBase::Status::Succeeded) {
+            m_clientErrors.insert(id, operation->error().message);
+            qCWarning(lcLibMcpPage).noquote()
+                << QStringLiteral("%1失败：%2")
+                       .arg(connected ? QStringLiteral("连接")
+                                      : QStringLiteral("断开"),
+                            operation->error().message);
+        } else {
+            m_clientErrors.remove(id);
+            qCInfo(lcLibMcpPage).noquote()
+                << QStringLiteral("Client %1 已%2")
+                       .arg(id,
+                            connected ? QStringLiteral("连接")
+                                      : QStringLiteral("断开"));
+        }
+        refreshClientTable();
+    };
+    connect(operation.data(),
+            &McpOperationBase::finished,
+            this,
+            finishOperation);
+    if (operation->isFinished()) {
+        finishOperation();
+    }
+}
+
+void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
+{
+    const QList<McpClientConfig> configs = m_clientManager.configs();  // 获取排序后的配置快照
+    m_clientTable->setRowCount(configs.size());
+    for (int row = 0; row < configs.size(); ++row) {
+        const McpClientConfig& config = configs.at(row);  // 当前需要显示的 Client 配置
+        McpClient* client = m_clientManager.client(config.id);  // 当前可选运行实例
+        const bool connected = client && client->isRunning();  // 当前最终连接状态
+        m_clientTable->setItem(row, 0, new QTableWidgetItem(config.name));
+        m_clientTable->setItem(
+            row,
+            1,
+            new QTableWidgetItem(
+                config.transportType == QStringLiteral("stdio")
+                    ? QStringLiteral("STDIO")
+                    : QStringLiteral("流式 HTTP")));
+        auto* summaryItem = new QTableWidgetItem(configurationSummary(config));  // 可展开查看的 JSON 参数摘要
+        summaryItem->setToolTip(summaryItem->text());
+        m_clientTable->setItem(row, 2, summaryItem);
+
+        const QString stateText = connected  // 合并最终连接状态与可操作的错误摘要
+                                      ? QStringLiteral("已连接")
+                                      : m_clientErrors.value(
+                                            config.id,
+                                            QStringLiteral("未连接"));
+        auto* switchBox = new QCheckBox(stateText,
+                                        m_clientTable);  // 切换 Client 最终连接状态
+        switchBox->setToolTip(m_clientErrors.value(config.id));
+        switchBox->setObjectName(QStringLiteral("mcpClientConnectionSwitch_%1").arg(config.id));
+        switchBox->setChecked(connected);
+        switchBox->setEnabled(m_operations.isEmpty());
+        connect(switchBox,
+                &QCheckBox::toggled,
+                this,
+                [this, id = config.id, connected](bool checked) {  // 忽略表格初始化并处理用户切换
+                    if (checked != connected) {
+                        setClientConnected(id, checked);
+                    }
+                });
+        m_clientTable->setCellWidget(row, 3, switchBox);
+
+        auto* actions = new QWidget(m_clientTable);  // 承载当前行编辑和删除按钮
+        auto* actionLayout = new QHBoxLayout(actions);  // 紧凑排列次要行内操作
+        actionLayout->setContentsMargins(0, 0, 0, 0);
+        auto* editButton = new QPushButton(QStringLiteral("编辑"), actions);  // 编辑未连接配置
+        auto* deleteButton = new QPushButton(QStringLiteral("删除"), actions);  // 删除未连接配置
+        editButton->setEnabled(!connected);
+        deleteButton->setEnabled(!connected);
+        connect(editButton,
+                &QPushButton::clicked,
+                this,
+                [this, id = config.id] { editClient(id); });
+        connect(deleteButton,
+                &QPushButton::clicked,
+                this,
+                [this, id = config.id] { removeClient(id); });
+        actionLayout->addWidget(editButton);
+        actionLayout->addWidget(deleteButton);
+        m_clientTable->setCellWidget(row, 4, actions);
+    }
+}
+
+QString LibMcpPage::configurationSummary(
+    const McpClientConfig& config) const  // 生成表格中的紧凑 JSON 参数摘要
+{
+    return QString::fromUtf8(
+        QJsonDocument(config.transportConfig).toJson(QJsonDocument::Compact));
+}
+
+void LibMcpPage::loadConfigurations()  // 从 mcp-clients.json 事务式加载配置
+{
+    QFile file(configurationPath());  // 打开持久化 Client 配置文件
+    if (!file.exists()) {
+        return;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        qCWarning(lcLibMcpPage) << "无法读取 MCP Client 配置";
+        return;
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());  // 解析完整配置文档
+    if (!document.isObject()) {
+        qCWarning(lcLibMcpPage) << "MCP Client 配置不是 JSON 对象";
+        return;
+    }
+    const McpResult<void> result = m_clientManager.deserialize(document.object());  // 事务式替换配置集合
+    if (result.isError()) {
+        qCWarning(lcLibMcpPage).noquote() << result.error().message;
+    }
+}
+
+void LibMcpPage::saveConfigurations() const  // 将当前配置原子写入 mcp-clients.json
+{
+    QSaveFile file(configurationPath());  // 防止异常退出留下部分配置文件
+    if (!file.open(QIODevice::WriteOnly)) {
+        qCWarning(lcLibMcpPage) << "无法写入 MCP Client 配置";
+        return;
+    }
+    file.write(QJsonDocument(m_clientManager.serialize()).toJson(QJsonDocument::Indented));
+    if (!file.commit()) {
+        qCWarning(lcLibMcpPage) << "提交 MCP Client 配置失败";
+    }
+}
+
+QString LibMcpPage::configurationPath() const  // 返回 TestApp 配置文件路径
+{
+    return QCoreApplication::applicationDirPath()
+           + QStringLiteral("/mcp-clients.json");
+}
+
+void LibMcpPage::startServer()  // 按当前 Endpoint 配置启动 Server
+{
+    if (m_server) {
+        return;
+    }
+    auto transport = std::make_unique<StreamableHttpServerTransport>(  // 创建无状态 HTTP Server Transport
         QHostAddress(m_serverAddress->text().trimmed()),
         static_cast<quint16>(m_serverPort->value()),
         m_serverPath->text().trimmed());
@@ -143,36 +365,140 @@ void LibMcpPage::startLocalServer()  // 启动界面配置的本地 MCP 服务�
         McpServer::ServerInfo{QStringLiteral("LibMcpTestServer"),
                               QStringLiteral("0.1.0"),
                               QStringLiteral("LibMcp Test Server")});
+    connect(m_server.get(),
+            &McpServer::requestStarted,
+            this,
+            [this](const QString& method, const QJsonObject& clientInfo) {  // 记录请求开始和自包含 ClientInfo
+                ++m_totalRequestCount;
+                ++m_activeRequestCount;
+                m_activeRequests->setText(
+                    QStringLiteral("Active Requests: %1").arg(m_activeRequestCount));
+                m_totalRequests->setText(QStringLiteral("总请求: %1").arg(m_totalRequestCount));
+                m_recentRequests->insertRow(0);
+                m_recentRequests->setItem(
+                    0,
+                    0,
+                    new QTableWidgetItem(
+                        QStringLiteral("%1 %2")
+                            .arg(clientInfo.value(QStringLiteral("name")).toString(),
+                                 clientInfo.value(QStringLiteral("version")).toString())
+                            .trimmed()));
+                m_recentRequests->setItem(0, 1, new QTableWidgetItem(method));
+                m_recentRequests->setItem(0, 2, new QTableWidgetItem(
+                    QDateTime::currentDateTime().toString(Qt::ISODate)));
+                m_recentRequests->setItem(0, 3, new QTableWidgetItem(QStringLiteral("—")));
+                m_recentRequests->setItem(0, 4, new QTableWidgetItem(QStringLiteral("处理中")));
+                while (m_recentRequests->rowCount() > 50) {
+                    m_recentRequests->removeRow(m_recentRequests->rowCount() - 1);
+                }
+            });
+    connect(m_server.get(),
+            &McpServer::requestFinished,
+            this,
+            [this](const QString& method, qint64 elapsedMs, bool success) {  // 完成请求统计并更新最近记录
+                m_activeRequestCount = qMax(0, m_activeRequestCount - 1);
+                if (success) {
+                    ++m_successRequestCount;
+                }
+                m_activeRequests->setText(
+                    QStringLiteral("Active Requests: %1").arg(m_activeRequestCount));
+                m_successRequests->setText(
+                    QStringLiteral("成功: %1").arg(m_successRequestCount));
+                for (int row = 0; row < m_recentRequests->rowCount(); ++row) {
+                    if (m_recentRequests->item(row, 1)->text() == method
+                        && m_recentRequests->item(row, 4)->text() == QStringLiteral("处理中")) {
+                        m_recentRequests->item(row, 3)->setText(
+                            QStringLiteral("%1 ms").arg(elapsedMs));
+                        m_recentRequests->item(row, 4)->setText(
+                            success ? QStringLiteral("成功") : QStringLiteral("协议错误"));
+                        break;
+                    }
+                }
+            });
+    connect(m_server.get(),
+            &McpServer::protocolError,
+            this,
+            [this](const McpError&) {  // 累计并显示协议错误数量
+                ++m_protocolErrorCount;
+                m_protocolErrors->setText(
+                    QStringLiteral("协议错误: %1").arg(m_protocolErrorCount));
+            });
 
     McpTool echoTool;  // 提供用于人工验证调用链的回显工具
     echoTool.name = QStringLiteral("echo");
     echoTool.description = QStringLiteral("返回调用方提交的参数。");
-    echoTool.inputSchema = {
-        {QStringLiteral("type"), QStringLiteral("object")}};
+    echoTool.inputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
+    echoTool.outputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
     m_server->addTool(
         echoTool,
-        [](const QJsonArray &input) { return input; });  // 原样返回输入参数以便人工核对
+        [](const McpToolCallRequest& request,
+           const McpRequestContext&) {  // 同时返回文本和结构化回显结果
+            McpToolCallResult result;  // 保存避免依赖聚合字段顺序的回显结果
+            result.content =
+                QJsonArray{QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("text")},
+                    {QStringLiteral("text"),
+                     QString::fromUtf8(QJsonDocument(request.arguments)
+                                           .toJson(QJsonDocument::Compact))}}};
+            result.structuredContent = request.arguments;
+            return result;
+        });
 
-    auto *watcher =  // 监视本地服务端异步启动结果
-        new QFutureWatcher<McpResult<void>>(this);
+    auto* watcher = new QFutureWatcher<McpResult<void>>(this);  // 监视 Server 启动结果
     connect(watcher,
             &QFutureWatcher<McpResult<void>>::finished,
             this,
-            [this, watcher] {  // 启动完成后记录服务地址或错误信息
-                const McpResult<void> result = watcher->result();  // 保存服务端启动结果
+            [this, watcher] {  // 根据最终启动结果更新状态和日志
+                const McpResult<void> result = watcher->result();  // 保存 Server 启动结果
                 watcher->deleteLater();
                 if (result.isError()) {
-                    qCWarning(lcLibMcpPage).noquote()
-                        << QStringLiteral("Server 启动失败：%1")
-                               .arg(result.error().message);
+                    ++m_transportErrorCount;
+                    m_transportErrors->setText(
+                        QStringLiteral("Transport 错误: %1")
+                            .arg(m_transportErrorCount));
+                    qCWarning(lcLibMcpPage).noquote() << result.error().message;
                     m_server.reset();
-                    return;
                 }
-                qCInfo(lcLibMcpPage).noquote()
-                    << QStringLiteral("Server 已启动：http://%1:%2%3")
-                           .arg(m_serverAddress->text())
-                           .arg(m_serverPort->value())
-                           .arg(m_serverPath->text());
+                updateServerControls();
             });
     watcher->setFuture(m_server->start());
+    updateServerControls();
+}
+
+void LibMcpPage::stopServer()  // 停止当前 Server 并恢复 Endpoint 编辑
+{
+    if (!m_server) {
+        return;
+    }
+    auto* watcher = new QFutureWatcher<McpResult<void>>(this);  // 监视 Server 停止结果
+    connect(watcher,
+            &QFutureWatcher<McpResult<void>>::finished,
+            this,
+            [this, watcher] {  // 停止完成后释放 Server 并恢复配置输入
+                const McpResult<void> result = watcher->result();  // 保存 Server 停止结果
+                watcher->deleteLater();
+                if (result.isError()) {
+                    qCWarning(lcLibMcpPage).noquote() << result.error().message;
+                }
+                m_server.reset();
+                updateServerControls();
+            });
+    watcher->setFuture(m_server->stop());
+}
+
+void LibMcpPage::updateServerControls()  // 同步 Server 状态文本和控件可用性
+{
+    const bool running = m_server && m_server->isRunning();  // 当前 Server 最终运行状态
+    m_serverStatus->setText(running ? QStringLiteral("运行中")
+                                    : QStringLiteral("已停止"));
+    m_serverEndpoint->setText(
+        QStringLiteral("http://%1:%2%3")
+            .arg(m_serverAddress->text())
+            .arg(m_serverPort->value())
+            .arg(m_serverPath->text()));
+    m_serverAddress->setEnabled(!m_server);
+    m_serverPort->setEnabled(!m_server);
+    m_serverPath->setEnabled(!m_server);
+    m_startServer->setEnabled(!m_server);
+    m_stopServer->setEnabled(m_server != nullptr);
 }

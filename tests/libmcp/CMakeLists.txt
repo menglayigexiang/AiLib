@@ -1,6 +1,43 @@
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Test)
 
 if(QT_VERSION_MAJOR EQUAL 6)
+    qt_add_executable(libmcp_stdio_test_server stdio_echo_server.cpp)
+else()
+    add_executable(libmcp_stdio_test_server stdio_echo_server.cpp)
+endif()
+
+target_link_libraries(libmcp_stdio_test_server
+    PRIVATE
+        Qt${QT_VERSION_MAJOR}::Core
+)
+
+if(QT_VERSION_MAJOR EQUAL 6)
+    qt_add_executable(libmcp_interop_server interop_server.cpp)
+else()
+    add_executable(libmcp_interop_server interop_server.cpp)
+endif()
+
+target_link_libraries(libmcp_interop_server
+    PRIVATE
+        LibMcp::LibMcp
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Network
+)
+
+if(QT_VERSION_MAJOR EQUAL 6)
+    qt_add_executable(libmcp_interop_client interop_client.cpp)
+else()
+    add_executable(libmcp_interop_client interop_client.cpp)
+endif()
+
+target_link_libraries(libmcp_interop_client
+    PRIVATE
+        LibMcp::LibMcp
+        Qt${QT_VERSION_MAJOR}::Core
+        Qt${QT_VERSION_MAJOR}::Network
+)
+
+if(QT_VERSION_MAJOR EQUAL 6)
     qt_add_executable(tst_LibMcp tst_LibMcp.cpp)
 else()
     add_executable(tst_LibMcp tst_LibMcp.cpp)
@@ -11,6 +48,12 @@ target_link_libraries(tst_LibMcp
         LibMcp::LibMcp
         Qt${QT_VERSION_MAJOR}::Test
 )
+
+target_compile_definitions(tst_LibMcp
+    PRIVATE
+        LIBMCP_STDIO_TEST_SERVER="$<TARGET_FILE:libmcp_stdio_test_server>"
+)
+add_dependencies(tst_LibMcp libmcp_stdio_test_server)
 
 add_test(NAME LibMcp COMMAND tst_LibMcp)
 set_tests_properties(LibMcp PROPERTIES TIMEOUT 30)

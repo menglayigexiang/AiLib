@@ -9,11 +9,18 @@ endif()
 set(libmcp_sources
     core/JsonRpcCodec.cpp
     core/McpProtocolCodec.cpp
+    core/McpOperation.cpp
+    core/ProtocolMetadata.cpp
+    core/ProtocolSchemaValidator.cpp
     core/JsonSchemaValidator.cpp
+    http/HttpClient.cpp
+    http/HttpServer.cpp
     client/McpClient.cpp
     client/McpClientManager.cpp
     server/McpServer.cpp
     transport/InMemoryTransport.cpp
+    transport/StdioClientTransport.cpp
+    transport/StdioServerTransport.cpp
     transport/StreamableHttpClientTransport.cpp
     transport/StreamableHttpServerTransport.cpp
 )
@@ -23,13 +30,15 @@ set(libmcp_public_headers
     ../include/LibMcp/LibMcpGlobal.h
     ../include/LibMcp/McpClient.h
     ../include/LibMcp/McpClientManager.h
+    ../include/LibMcp/McpOperation.h
     ../include/LibMcp/McpClientTransport.h
     ../include/LibMcp/McpResult.h
     ../include/LibMcp/McpServer.h
     ../include/LibMcp/McpServerTransport.h
-    ../include/LibMcp/McpTransport.h
     ../include/LibMcp/McpTypes.h
     ../include/LibMcp/StreamableHttpTransport.h
+    ../include/LibMcp/StdioTransport.h
+    ../protocol/protocol.qrc
 )
 
 if(QT_VERSION_MAJOR EQUAL 6)
@@ -57,6 +66,8 @@ target_include_directories(LibMcp
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/jsoncons/include
 )
 
 target_link_libraries(LibMcp
@@ -68,6 +79,7 @@ target_link_libraries(LibMcp
 )
 
 set_target_properties(LibMcp PROPERTIES
+    AUTORCC ON
     AILIB_QT_MAJOR ${QT_VERSION_MAJOR}
     OUTPUT_NAME Mcp
     VERSION ${PROJECT_VERSION}

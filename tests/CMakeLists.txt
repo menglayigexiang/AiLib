@@ -97,6 +97,8 @@ if(AILIB_BUILD_MCP)
     list(APPEND demo_test_sources
         ../TestApp/LibMcp/LibMcpPage.cpp
         ../TestApp/LibMcp/LibMcpPage.h
+        ../TestApp/LibMcp/McpClientConfigDialog.cpp
+        ../TestApp/LibMcp/McpClientConfigDialog.h
     )
 endif()
 

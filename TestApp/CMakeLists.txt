@@ -21,6 +21,8 @@ if(AILIB_BUILD_MCP)
     list(APPEND test_app_sources
         LibMcp/LibMcpPage.cpp
         LibMcp/LibMcpPage.h
+        LibMcp/McpClientConfigDialog.cpp
+        LibMcp/McpClientConfigDialog.h
     )
 endif()
 

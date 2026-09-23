@@ -3,6 +3,13 @@
 #include "../../TestApp/MainWindow.h"
 #include <QtTest>
 #include <QTabWidget>
+#if defined(AILIB_TESTAPP_HAS_MCP)
+#include "../../TestApp/LibMcp/LibMcpPage.h"
+#include "../../TestApp/LibMcp/McpClientConfigDialog.h"
+#include <QLineEdit>
+#include <QStackedWidget>
+#include <QTableWidget>
+#endif
 
 // 验证 TestApp 的 LibAiCore 页面展示 Provider、模型并在缺少凭据时安全失败。
 class DemoTest final : public QObject {
@@ -61,6 +68,45 @@ private slots:
         if (!originalKey.isNull())
             qputenv("DEEPSEEK_API_KEY", originalKey);
     }
+
+#if defined(AILIB_TESTAPP_HAS_MCP)
+    void mcpClientDialogSwitchesTransportForms()  // 配置对话框按类型展示 STDIO 或 HTTP 参数
+    {
+        McpClientConfigDialog dialog;  // 当前测试的新增与编辑共用配置表单
+        auto* type = dialog.findChild<QComboBox*>(QStringLiteral("mcpClientTypeCombo"));  // Transport 类型选择框
+        auto* pages = dialog.findChild<QStackedWidget*>(QStringLiteral("mcpClientTransportPages"));  // Transport 参数页
+        auto* command = dialog.findChild<QLineEdit*>(QStringLiteral("mcpStdioCommandEdit"));  // STDIO 命令输入框
+        auto* url = dialog.findChild<QLineEdit*>(QStringLiteral("mcpHttpUrlEdit"));  // HTTP URL 输入框
+        QVERIFY(type);
+        QVERIFY(pages);
+        QVERIFY(command);
+        QVERIFY(url);
+        QCOMPARE(type->currentData().toString(), QStringLiteral("stdio"));
+        QCOMPARE(pages->currentIndex(), 0);
+        type->setCurrentIndex(type->findData(QStringLiteral("streamable-http")));
+        QCOMPARE(pages->currentIndex(), 1);
+    }
+
+    void mcpPageExposesClientAndStatelessServerControls()  // 验证 Client 列表与无状态 Server 观测控件存在
+    {
+        LibMcpPage page;  // 当前通过控件树验证的 LibMcp 测试页
+        auto* addButton =  // 打开 Client 新增对话框的入口
+            page.findChild<QPushButton*>(QStringLiteral("addMcpClientButton"));
+        auto* clientTable =  // 展示 Client 配置、状态和行内操作的表格
+            page.findChild<QTableWidget*>(QStringLiteral("mcpClientTable"));
+        auto* serverStatus =  // 展示 Server 最终运行状态的文本
+            page.findChild<QLabel*>(QStringLiteral("mcpServerStatusLabel"));
+        auto* recentRequests =  // 展示最近请求 ClientInfo 和结果的表格
+            page.findChild<QTableWidget*>(QStringLiteral("mcpRecentRequestsTable"));
+        QVERIFY(addButton);
+        QVERIFY(clientTable);
+        QVERIFY(serverStatus);
+        QVERIFY(recentRequests);
+        QCOMPARE(clientTable->columnCount(), 5);
+        QCOMPARE(recentRequests->columnCount(), 5);
+        QVERIFY(!page.findChild<QWidget*>(QStringLiteral("connectedClients")));
+    }
+#endif
 };
 
 QTEST_MAIN(DemoTest)

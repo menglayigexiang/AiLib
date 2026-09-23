@@ -5,8 +5,6 @@
 
 namespace LibMcp::Internal {
 
-QJsonObject requestMeta();
-
 QJsonObject encodeTool(const McpTool &tool);
 McpResult<McpTool> decodeTool(const QJsonObject &object);
 
