@@ -3,6 +3,8 @@
 #include <LibMcp/McpClientTransport.h>
 #include <LibMcp/McpServerTransport.h>
 
+#include <QPointer>
+
 #include <memory>
 #include <utility>
 
@@ -23,8 +25,8 @@ public:
     void connectPeer(InMemoryServerTransport *peer);               // 绑定不拥有的 Server 配对端
 
 private:
-    InMemoryServerTransport *m_peer = nullptr; ///< 不拥有的配对端。
-    bool m_running = false;                    ///< 是否接受消息。
+    QPointer<InMemoryServerTransport> m_peer;  // 自动感知销毁的非拥有配对端
+    bool m_running = false;                    // 是否接受消息
 };
 
 /// 用于自动测试的 Server 端内存 Transport。
@@ -41,8 +43,8 @@ public:
     void connectPeer(InMemoryClientTransport *peer);              // 绑定不拥有的 Client 配对端
 
 private:
-    InMemoryClientTransport *m_peer = nullptr; ///< 不拥有的配对端。
-    bool m_running = false;                    ///< 是否接受消息。
+    QPointer<InMemoryClientTransport> m_peer;  // 自动感知销毁的非拥有配对端
+    bool m_running = false;                    // 是否接受消息
 };
 
 LIBMCP_EXPORT std::pair<std::unique_ptr<InMemoryClientTransport>,

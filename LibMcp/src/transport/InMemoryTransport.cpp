@@ -39,11 +39,13 @@ QFuture<McpResult<void>> InMemoryClientTransport::sendMessage(
              QStringLiteral("In-memory transport is not connected")}));
     }
 
-    InMemoryServerTransport *peer = m_peer;
+    const QPointer<InMemoryServerTransport> peer = m_peer;  // 防止排队投递期间访问已销毁的 Server
     QMetaObject::invokeMethod(
-        peer,
+        peer.data(),
         [peer, message] {
-            emit peer->messageReceived(QStringLiteral("in-memory"), message);
+            if (peer) {
+                emit peer->messageReceived(QStringLiteral("in-memory"), message);
+            }
         },
         Qt::QueuedConnection);
     return readyFuture(McpResult<void>::success());
@@ -81,10 +83,14 @@ QFuture<McpResult<void>> InMemoryServerTransport::sendMessage(
              QStringLiteral("In-memory transport is not connected")}));
     }
 
-    InMemoryClientTransport *peer = m_peer;
+    const QPointer<InMemoryClientTransport> peer = m_peer;  // 防止排队投递期间访问已销毁的 Client
     QMetaObject::invokeMethod(
-        peer,
-        [peer, message] { emit peer->messageReceived(message); },
+        peer.data(),
+        [peer, message] {  // 仅在配对端仍存活时投递消息
+            if (peer) {
+                emit peer->messageReceived(message);
+            }
+        },
         Qt::QueuedConnection);
     return readyFuture(McpResult<void>::success());
 }

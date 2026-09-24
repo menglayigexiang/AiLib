@@ -101,6 +101,8 @@ if(AILIB_BUILD_MCP)
         ../TestApp/LibMcp/McpClientConfigDialog.h
         ../TestApp/LibMcp/McpClientWorkbench.cpp
         ../TestApp/LibMcp/McpClientWorkbench.h
+        ../TestApp/LibMcp/TestServerTools.cpp
+        ../TestApp/LibMcp/TestServerTools.h
     )
 endif()
 

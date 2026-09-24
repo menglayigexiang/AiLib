@@ -690,6 +690,33 @@ McpServer::McpServer(std::unique_ptr<McpServerTransport> transport,
 
 McpServer::~McpServer() = default;
 
+McpServer::ServerInfo McpServer::serverInfo() const  // 返回 Server 对外声明的身份信息
+{
+    return d->serverInfo;
+}
+
+QStringList McpServer::supportedProtocolVersions() const  // 返回当前实现支持的协议版本
+{
+    return {QStringLiteral(LIBMCP_PROTOCOL_VERSION)};
+}
+
+QJsonObject McpServer::capabilities() const  // 返回根据注册表生成的能力声明
+{
+    return d->capabilities();
+}
+
+QList<McpTool> McpServer::tools() const  // 返回按名称排序的已注册工具快照
+{
+    QList<McpTool> result;  // 保存与内部处理函数解耦的工具描述副本
+    QStringList names = d->tools.keys();  // 固定稳定排序使用的工具名称
+    names.sort();
+    result.reserve(names.size());
+    for (const QString& name : names) {  // 按名称生成确定顺序的工具列表
+        result.append(d->tools.value(name).descriptor);
+    }
+    return result;
+}
+
 bool McpServer::addTool(
     const McpTool& tool,          // 需要注册并对外公布的工具描述
     McpToolFunction function)     // 注册工具并校验输入输出 Schema
@@ -712,6 +739,7 @@ bool McpServer::addTool(
     }
 
     d->tools.insert(tool.name, {tool, std::move(function)});
+    emit capabilitiesChanged();
     if (d->running) {
         d->publishListChanged(QStringLiteral("toolsListChanged"),
                               QStringLiteral("notifications/tools/list_changed"));
@@ -727,6 +755,7 @@ bool McpServer::addResource(const McpResource &resource,
         return false;
     }
     d->resources.insert(resource.uri, {resource, std::move(function)});
+    emit capabilitiesChanged();
     if (d->running) {
         d->publishListChanged(QStringLiteral("resourcesListChanged"),
                               QStringLiteral("notifications/resources/list_changed"));
@@ -750,6 +779,7 @@ bool McpServer::addResourceTemplate(
     d->resourceTemplates.insert(
         resourceTemplate.uriTemplate,
         {resourceTemplate, std::move(function), expression});
+    emit capabilitiesChanged();
     if (d->running) {
         d->publishListChanged(QStringLiteral("resourcesListChanged"),
                               QStringLiteral("notifications/resources/list_changed"));
@@ -765,6 +795,7 @@ bool McpServer::addPrompt(const McpPrompt &prompt,
         return false;
     }
     d->prompts.insert(prompt.name, {prompt, std::move(function)});
+    emit capabilitiesChanged();
     if (d->running) {
         d->publishListChanged(QStringLiteral("promptsListChanged"),
                               QStringLiteral("notifications/prompts/list_changed"));
@@ -776,6 +807,7 @@ void McpServer::setCompletionHandler(
     McpCompletionFunction function)  // 设置唯一补全处理器并同步能力声明
 {
     d->completionFunction = std::move(function);
+    emit capabilitiesChanged();
 }
 
 void McpServer::notifyResourceUpdated(

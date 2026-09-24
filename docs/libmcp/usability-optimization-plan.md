@@ -57,7 +57,8 @@ Tool annotations、Server 身份和错误信息，让宿主能够安全决策。
 ```text
 ┌──────────────────────────── TestApp 使用者 ────────────────────────────┐
 │                                                                        │
-│  Client 列表                                                          │
+│  Client 页面                                                          │
+│  ├─ 上方：Client 配置、状态与调试目标选择（固定三行）                 │
 │  ├─ 添加 / 编辑配置                                                   │
 │  │   ├─ STDIO：命令、参数、环境变量、工作目录                         │
 │  │   └─ HTTP：URL、固定 Header、环境变量 Header、Bearer 环境变量      │
@@ -71,9 +72,9 @@ Tool annotations、Server 身份和错误信息，让宿主能够安全决策。
 │      └─ Starting → Discovering → Loading capabilities → Ready / Error │
 │                                      │                                 │
 │                                      ▼                                 │
-│  Client 调试工作台                                                     │
+│  └─ 下方：Client 调试工作台（同页纵向滚动，保持舒适阅读高度）         │
 │  ├─ 概览：Endpoint、ServerInfo、版本、能力、最近错误                   │
-│  ├─ Tools：搜索、Schema、参数模板、调用、Progress、MRTR、结果          │
+│  ├─ Tools：单列搜索、全宽 Schema 标签、调用、Progress、MRTR、结果     │
 │  │          └─ 风险标记、调用确认、缓存刷新                           │
 │  ├─ Resources：列表、模板、读取结果                                    │
 │  ├─ Prompts：列表、参数、展开结果                                      │

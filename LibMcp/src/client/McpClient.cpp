@@ -110,23 +110,27 @@ public:
         if (!requestId.isEmpty()) {
             progressOperations.insert(requestId, operation);
         }
-        QObject::connect(operation.data(),
+        McpOperation<T>* operationPointer = operation.data();  // 不延长 sender 生命周期的跟踪指针
+        QObject::connect(operationPointer,
                          &McpOperationBase::finished,
                          owner,
-                         [this, operation, requestId] {  // 完成后释放 Client 持有的共享引用
-                             activeOperations.remove(operation.data());
+                         [this, operationPointer, requestId] {  // 完成后释放 Client 持有的共享引用
+                             activeOperations.remove(operationPointer);
                              if (!requestId.isEmpty()) {
                                  progressOperations.remove(requestId);
                              }
                          });
-        QObject::connect(operation.data(),
+        QObject::connect(operationPointer,
                          &McpOperationBase::cancellationRequested,
                          owner,
-                         [this, operation, requestId] {  // 结束公共操作并通知远端放弃请求
+                         [this, operationPointer, requestId] {  // 结束公共操作并通知远端放弃请求
                              if (!requestId.isEmpty()) {
                                  cancelPendingRequest(requestId);
                              }
-                             Internal::McpOperationAccess::cancel(operation);
+                             const auto operation = activeOperations.value(operationPointer);  // 从 Client 所有权表取得安全强引用
+                             if (operation) {
+                                 Internal::McpOperationAccess::cancel(operation);
+                             }
                          });
 
         auto* watcher = new QFutureWatcher<McpResult<T>>(owner);  // 监视内部 Future 最终结果
@@ -169,23 +173,27 @@ public:
         if (!requestId.isEmpty()) {
             progressOperations.insert(requestId, operation);
         }
-        QObject::connect(operation.data(),
+        McpOperation<void>* operationPointer = operation.data();  // 不延长 sender 生命周期的跟踪指针
+        QObject::connect(operationPointer,
                          &McpOperationBase::finished,
                          owner,
-                         [this, operation, requestId] {  // 完成后释放 Client 持有的共享引用
-                             activeOperations.remove(operation.data());
+                         [this, operationPointer, requestId] {  // 完成后释放 Client 持有的共享引用
+                             activeOperations.remove(operationPointer);
                              if (!requestId.isEmpty()) {
                                  progressOperations.remove(requestId);
                              }
                          });
-        QObject::connect(operation.data(),
+        QObject::connect(operationPointer,
                          &McpOperationBase::cancellationRequested,
                          owner,
-                         [this, operation, requestId] {  // 结束公共操作并通知远端放弃请求
+                         [this, operationPointer, requestId] {  // 结束公共操作并通知远端放弃请求
                              if (!requestId.isEmpty()) {
                                  cancelPendingRequest(requestId);
                              }
-                             Internal::McpOperationAccess::cancel(operation);
+                             const auto operation = activeOperations.value(operationPointer);  // 从 Client 所有权表取得安全强引用
+                             if (operation) {
+                                 Internal::McpOperationAccess::cancel(operation);
+                             }
                          });
         auto* watcher = new QFutureWatcher<McpResult<void>>(owner);  // 监视内部 Future 最终结果
         QObject::connect(
@@ -406,9 +414,14 @@ public:
         };
 
         auto state = std::make_shared<PaginationState>();
-        auto loadPage = std::make_shared<std::function<void(QString)>>();
-        *loadPage = [this, method, field, decoder, state, loadPage](
+        auto loadPage = std::make_shared<std::function<void(QString)>>();  // 在相邻分页请求间传递递归驱动器
+        const std::weak_ptr<std::function<void(QString)>> weakLoadPage = loadPage;  // 避免 function 强引用自身
+        *loadPage = [this, method, field, decoder, state, weakLoadPage](
                         const QString &cursor) {
+            const auto nextPage = weakLoadPage.lock();  // 保持驱动器到当前页完成
+            if (!nextPage) {
+                return;
+            }
             QJsonObject params;
             if (!cursor.isEmpty()) {
                 params.insert(QStringLiteral("cursor"), cursor);
@@ -419,7 +432,7 @@ public:
                 watcher,
                 &QFutureWatcher<McpResult<QJsonObject>>::finished,
                 owner,
-                [field, decoder, state, loadPage, watcher] {
+                [field, decoder, state, nextPage, watcher] {
                     const auto page = watcher->result();
                     watcher->deleteLater();
                     if (page.isError()) {
@@ -456,7 +469,7 @@ public:
                         return;
                     }
                     state->cursors.insert(nextCursor);
-                    (*loadPage)(nextCursor);
+                    (*nextPage)(nextCursor);
                 });
             watcher->setFuture(request(method, params));
         };

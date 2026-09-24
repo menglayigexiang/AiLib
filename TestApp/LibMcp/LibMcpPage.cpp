@@ -2,6 +2,7 @@
 
 #include "McpClientConfigDialog.h"
 #include "McpClientWorkbench.h"
+#include "TestServerTools.h"
 
 #include <LibMcp/StreamableHttpTransport.h>
 
@@ -19,8 +20,11 @@
 #include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScrollArea>
+#include <QSplitter>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QTableWidget>
@@ -40,8 +44,6 @@ LibMcpPage::LibMcpPage(QWidget* parent)  // 创建 Client 与 Server 测试页
     auto* tabs = new QTabWidget(this);  // 承载 Client 配置和 Server 观测页面
     tabs->setObjectName(QStringLiteral("mcpTabs"));
     tabs->addTab(createClientPage(), QStringLiteral("Client"));
-    m_clientWorkbench = new McpClientWorkbench(&m_clientManager, tabs);
-    tabs->addTab(m_clientWorkbench, QStringLiteral("Client 调试"));
     tabs->addTab(createServerPage(), QStringLiteral("Server"));
     layout->addWidget(tabs);
     connect(&m_clientManager,
@@ -81,18 +83,26 @@ LibMcpPage::LibMcpPage(QWidget* parent)  // 创建 Client 与 Server 测试页
 
 QWidget* LibMcpPage::createClientPage()  // 创建 Client 列表与添加入口
 {
-    auto* page = new QWidget(this);  // 承载 Client 配置列表
-    auto* layout = new QVBoxLayout(page);  // 按工具栏和表格排列 Client 页面
+    auto* page = new QWidget(this);  // 承载融合后的 Client 管理与调试页面
+    auto* layout = new QVBoxLayout(page);  // 让滚动区域填满 Client 页面
+    auto* scrollArea = new QScrollArea(page);  // 小窗口中滚动整个 Client 内容，避免调试控件被压缩
+    scrollArea->setObjectName(QStringLiteral("mcpClientScrollArea"));
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* scrollContent = new QWidget(scrollArea);  // 承载配置列表和完整调试工作台
+    auto* contentLayout = new QVBoxLayout(scrollContent);  // 按使用顺序排列配置与调试区域
+    auto* configurationPanel = new QWidget(scrollContent);  // 承载 Client 配置与状态表
+    auto* configurationLayout = new QVBoxLayout(configurationPanel);  // 排列配置工具栏和表格
     auto* toolbar = new QHBoxLayout();  // 将说明文本与主要操作分置两端
-    auto* title = new QLabel(QStringLiteral("MCP Client 配置"), page);  // Client 页面标题
-    auto* addButton = new QPushButton(QStringLiteral("添加"), page);  // 打开新增配置对话框
+    auto* title = new QLabel(QStringLiteral("MCP Client 配置与状态"), configurationPanel);  // Client 页面标题
+    auto* addButton = new QPushButton(QStringLiteral("添加"), configurationPanel);  // 打开新增配置对话框
     addButton->setObjectName(QStringLiteral("addMcpClientButton"));
     toolbar->addWidget(title);
     toolbar->addStretch();
     toolbar->addWidget(addButton);
-    layout->addLayout(toolbar);
+    configurationLayout->addLayout(toolbar);
 
-    m_clientTable = new QTableWidget(0, 7, page);
+    m_clientTable = new QTableWidget(0, 7, configurationPanel);
     m_clientTable->setObjectName(QStringLiteral("mcpClientTable"));
     m_clientTable->setHorizontalHeaderLabels(
         {QStringLiteral("名称"),
@@ -110,10 +120,32 @@ QWidget* LibMcpPage::createClientPage()  // 创建 Client 列表与添加入口
     m_clientTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
     m_clientTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
     m_clientTable->verticalHeader()->setVisible(false);
+    m_clientTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_clientTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_clientTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_clientTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layout->addWidget(m_clientTable, 1);
+    const int visibleClientRows = 3;  // 配置列表固定展示的 Client 行数
+    const int clientTableHeight =  // 包含表头、三行内容和边框的固定高度
+        m_clientTable->horizontalHeader()->sizeHint().height()
+        + m_clientTable->verticalHeader()->defaultSectionSize() * visibleClientRows
+        + m_clientTable->frameWidth() * 2;
+    m_clientTable->setFixedHeight(clientTableHeight);
+    configurationLayout->addWidget(m_clientTable);
+    m_clientWorkbench = new McpClientWorkbench(&m_clientManager, scrollContent);
+    m_clientWorkbench->setMinimumHeight(620);
+    contentLayout->addWidget(configurationPanel);
+    contentLayout->addWidget(m_clientWorkbench, 1);
+    scrollArea->setWidget(scrollContent);
+    layout->addWidget(scrollArea, 1);
     connect(addButton, &QPushButton::clicked, this, [this] { addClient(); });
+    connect(m_clientTable,
+            &QTableWidget::currentCellChanged,
+            this,
+            [this](int currentRow, int, int, int) {  // 将配置表当前行同步为唯一调试目标
+                const QTableWidgetItem* item = m_clientTable->item(currentRow, 0);  // 读取当前行保存的 Client ID
+                m_clientWorkbench->setSelectedClientId(
+                    item ? item->data(Qt::UserRole).toString() : QString{});
+            });
     return page;
 }
 
@@ -145,31 +177,69 @@ QWidget* LibMcpPage::createServerPage()  // 创建 Server 状态、统计和请�
     actions->addStretch();
     layout->addLayout(actions);
 
-    auto* statusForm = new QFormLayout();  // 显示 Server 最终状态和固定协议信息
-    m_serverStatus = new QLabel(page);
+    auto* detailsTabs = new QTabWidget(page);  // 分离服务描述与请求监控以保证阅读空间
+    detailsTabs->setObjectName(QStringLiteral("mcpServerDetailsTabs"));
+    auto* overviewPage = new QWidget(detailsTabs);  // 承载 Server 身份、能力和工具
+    auto* overviewLayout = new QVBoxLayout(overviewPage);  // 纵向排列概览与工具表
+    auto* statusForm = new QFormLayout();  // 显示 Server 最终状态、身份和协议信息
+    m_serverStatus = new QLabel(overviewPage);
     m_serverStatus->setObjectName(QStringLiteral("mcpServerStatusLabel"));
-    m_serverEndpoint = new QLabel(page);
-    m_protocolVersion = new QLabel(QStringLiteral(LIBMCP_PROTOCOL_VERSION), page);
+    m_serverEndpoint = new QLabel(overviewPage);
+    m_protocolVersion = new QLabel(QStringLiteral(LIBMCP_PROTOCOL_VERSION), overviewPage);
+    m_serverInfo = new QLabel(overviewPage);
+    m_serverInfo->setObjectName(QStringLiteral("mcpServerInfoLabel"));
+    m_serverSupportedVersions = new QLabel(overviewPage);
+    m_serverSupportedVersions->setObjectName(QStringLiteral("mcpServerSupportedVersionsLabel"));
     statusForm->addRow(QStringLiteral("状态"), m_serverStatus);
     statusForm->addRow(QStringLiteral("Endpoint"), m_serverEndpoint);
-    statusForm->addRow(QStringLiteral("协议版本"), m_protocolVersion);
-    layout->addLayout(statusForm);
+    statusForm->addRow(QStringLiteral("固定协议版本"), m_protocolVersion);
+    statusForm->addRow(QStringLiteral("ServerInfo"), m_serverInfo);
+    statusForm->addRow(QStringLiteral("支持版本"), m_serverSupportedVersions);
+    overviewLayout->addLayout(statusForm);
+
+    m_serverCapabilities = new QPlainTextEdit(overviewPage);
+    m_serverCapabilities->setObjectName(QStringLiteral("mcpServerCapabilitiesOutput"));
+    m_serverCapabilities->setReadOnly(true);
+    m_serverCapabilities->setMaximumHeight(120);
+    m_serverCapabilities->setPlaceholderText(QStringLiteral("启动 Server 后显示当前能力声明。"));
+    overviewLayout->addWidget(new QLabel(QStringLiteral("Capabilities"), overviewPage));
+    overviewLayout->addWidget(m_serverCapabilities);
+
+    m_serverTools = new QTableWidget(0, 6, overviewPage);
+    m_serverTools->setObjectName(QStringLiteral("mcpServerToolsTable"));
+    m_serverTools->setHorizontalHeaderLabels(
+        {QStringLiteral("名称"),
+         QStringLiteral("标题"),
+         QStringLiteral("说明"),
+         QStringLiteral("Input Schema"),
+         QStringLiteral("Output Schema"),
+         QStringLiteral("Annotations")});
+    m_serverTools->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_serverTools->verticalHeader()->setVisible(false);
+    m_serverTools->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_serverTools->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    overviewLayout->addWidget(new QLabel(QStringLiteral("已注册工具"), overviewPage));
+    overviewLayout->addWidget(m_serverTools, 1);
+    detailsTabs->addTab(overviewPage, QStringLiteral("服务概览与工具"));
+
+    auto* requestsPage = new QWidget(detailsTabs);  // 承载请求统计和最近请求
+    auto* requestsLayout = new QVBoxLayout(requestsPage);  // 纵向排列指标与请求表
 
     auto* metrics = new QHBoxLayout();  // 横向显示核心无状态请求指标
-    m_activeRequests = new QLabel(QStringLiteral("Active Requests: 0"), page);
-    m_totalRequests = new QLabel(QStringLiteral("总请求: 0"), page);
-    m_successRequests = new QLabel(QStringLiteral("成功: 0"), page);
-    m_protocolErrors = new QLabel(QStringLiteral("协议错误: 0"), page);
-    m_transportErrors = new QLabel(QStringLiteral("Transport 错误: 0"), page);
+    m_activeRequests = new QLabel(QStringLiteral("Active Requests: 0"), requestsPage);
+    m_totalRequests = new QLabel(QStringLiteral("总请求: 0"), requestsPage);
+    m_successRequests = new QLabel(QStringLiteral("成功: 0"), requestsPage);
+    m_protocolErrors = new QLabel(QStringLiteral("协议错误: 0"), requestsPage);
+    m_transportErrors = new QLabel(QStringLiteral("Transport 错误: 0"), requestsPage);
     metrics->addWidget(m_activeRequests);
     metrics->addWidget(m_totalRequests);
     metrics->addWidget(m_successRequests);
     metrics->addWidget(m_protocolErrors);
     metrics->addWidget(m_transportErrors);
     metrics->addStretch();
-    layout->addLayout(metrics);
+    requestsLayout->addLayout(metrics);
 
-    m_recentRequests = new QTableWidget(0, 5, page);
+    m_recentRequests = new QTableWidget(0, 5, requestsPage);
     m_recentRequests->setObjectName(QStringLiteral("mcpRecentRequestsTable"));
     m_recentRequests->setHorizontalHeaderLabels(
         {QStringLiteral("ClientInfo"),
@@ -180,7 +250,9 @@ QWidget* LibMcpPage::createServerPage()  // 创建 Server 状态、统计和请�
     m_recentRequests->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_recentRequests->verticalHeader()->setVisible(false);
     m_recentRequests->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layout->addWidget(m_recentRequests, 1);
+    requestsLayout->addWidget(m_recentRequests, 1);
+    detailsTabs->addTab(requestsPage, QStringLiteral("请求监控"));
+    layout->addWidget(detailsTabs, 1);
     connect(m_startServer, &QPushButton::clicked, this, [this] { startServer(); });
     connect(m_stopServer, &QPushButton::clicked, this, [this] { stopServer(); });
     return page;
@@ -273,8 +345,15 @@ void LibMcpPage::setClientEnabled(
 
 void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
 {
+    const QTableWidgetItem* currentItem = m_clientTable->item(
+        m_clientTable->currentRow(), 0);  // 刷新前当前选择的 Client 行
+    const QString previousId = currentItem
+        ? currentItem->data(Qt::UserRole).toString()
+        : QString{};  // 尽量跨状态刷新保留同一个 Client
     const QList<McpClientConfig> configs = m_clientManager.configs();  // 获取排序后的配置快照
+    m_clientTable->blockSignals(true);
     m_clientTable->setRowCount(configs.size());
+    int selectedRow = configs.isEmpty() ? -1 : 0;  // 原选择消失时回退到首个 Client
     for (int row = 0; row < configs.size(); ++row) {
         const McpClientConfig& config = configs.at(row);  // 当前需要显示的 Client 配置
         const McpClientManager::ClientState state =  // 当前完整启用流程阶段
@@ -284,7 +363,12 @@ void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
         const McpClientManager::ProtocolState protocolState =  // 当前固定协议验证状态
             m_clientManager.clientProtocolState(config.id);
         const bool enabled = m_clientManager.clientEnabled(config.id);  // 用户是否希望启用该配置
-        m_clientTable->setItem(row, 0, new QTableWidgetItem(config.name));
+        auto* nameItem = new QTableWidgetItem(config.name);  // 同时保存工作台选择所需的稳定 Client ID
+        nameItem->setData(Qt::UserRole, config.id);
+        m_clientTable->setItem(row, 0, nameItem);
+        if (config.id == previousId) {
+            selectedRow = row;
+        }
         m_clientTable->setItem(
             row,
             1,
@@ -388,6 +472,15 @@ void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
         actionLayout->addWidget(deleteButton);
         m_clientTable->setCellWidget(row, 6, actions);
     }
+    if (selectedRow >= 0) {
+        m_clientTable->setCurrentCell(selectedRow, 0);
+    } else {
+        m_clientTable->clearSelection();
+    }
+    m_clientTable->blockSignals(false);
+    const QTableWidgetItem* selectedItem = m_clientTable->item(selectedRow, 0);  // 读取刷新后的唯一调试目标
+    m_clientWorkbench->setSelectedClientId(
+        selectedItem ? selectedItem->data(Qt::UserRole).toString() : QString{});
 }
 
 QString LibMcpPage::configurationSummary(
@@ -452,6 +545,10 @@ void LibMcpPage::startServer()  // 按当前 Endpoint 配置启动 Server
                               QStringLiteral("0.1.0"),
                               QStringLiteral("LibMcp Test Server")});
     connect(m_server.get(),
+            &McpServer::capabilitiesChanged,
+            this,
+            [this] { refreshServerDescription(); });  // 注册表变化后立即刷新能力和工具
+    connect(m_server.get(),
             &McpServer::requestStarted,
             this,
             [this](const QString& method, const QJsonObject& clientInfo) {  // 记录请求开始和自包含 ClientInfo
@@ -510,25 +607,9 @@ void LibMcpPage::startServer()  // 按当前 Endpoint 配置启动 Server
                     QStringLiteral("协议错误: %1").arg(m_protocolErrorCount));
             });
 
-    McpTool echoTool;  // 提供用于人工验证调用链的回显工具
-    echoTool.name = QStringLiteral("echo");
-    echoTool.description = QStringLiteral("返回调用方提交的参数。");
-    echoTool.inputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
-    echoTool.outputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
-    m_server->addTool(
-        echoTool,
-        [](const McpToolCallRequest& request,
-           const McpRequestContext&) {  // 同时返回文本和结构化回显结果
-            McpToolCallResult result;  // 保存避免依赖聚合字段顺序的回显结果
-            result.content =
-                QJsonArray{QJsonObject{
-                    {QStringLiteral("type"), QStringLiteral("text")},
-                    {QStringLiteral("text"),
-                     QString::fromUtf8(QJsonDocument(request.arguments)
-                                           .toJson(QJsonDocument::Compact))}}};
-            result.structuredContent = request.arguments;
-            return result;
-        });
+    if (!registerTestServerTools(*m_server)) {
+        qCWarning(lcLibMcpPage) << "未能注册全部 MCP Server 测试工具";
+    }
 
     auto* watcher = new QFutureWatcher<McpResult<void>>(this);  // 监视 Server 启动结果
     connect(watcher,
@@ -587,4 +668,55 @@ void LibMcpPage::updateServerControls()  // 同步 Server 状态文本和控件�
     m_serverPath->setEnabled(!m_server);
     m_startServer->setEnabled(!m_server);
     m_stopServer->setEnabled(m_server != nullptr);
+    refreshServerDescription();
+}
+
+void LibMcpPage::refreshServerDescription()  // 刷新 Server 身份、版本、能力和工具快照
+{
+    const QStringList supportedVersions = m_server
+        ? m_server->supportedProtocolVersions()
+        : QStringList{QStringLiteral(LIBMCP_PROTOCOL_VERSION)};  // 当前实现对外支持的协议版本
+    m_serverSupportedVersions->setText(supportedVersions.join(QStringLiteral(", ")));
+
+    if (!m_server) {
+        m_serverInfo->setText(QStringLiteral("尚未创建"));
+        m_serverCapabilities->setPlainText(QStringLiteral("{}"));
+        m_serverTools->setRowCount(0);
+        return;
+    }
+
+    const McpServer::ServerInfo info = m_server->serverInfo();  // 读取 Server 对外身份
+    m_serverInfo->setText(
+        QStringLiteral("%1 %2 · %3")
+            .arg(info.name, info.version, info.title));
+    m_serverCapabilities->setPlainText(
+        QString::fromUtf8(
+            QJsonDocument(m_server->capabilities())
+                .toJson(QJsonDocument::Indented)));
+
+    const QList<McpTool> tools = m_server->tools();  // 获取按名称排序的工具快照
+    m_serverTools->setRowCount(tools.size());
+    for (int row = 0; row < tools.size(); ++row) {  // 将每个工具描述映射到表格一行
+        const McpTool& tool = tools.at(row);  // 当前需要展示的工具描述
+        const QString inputSchema =  // 紧凑显示输入 Schema，完整内容保留在提示中
+            QString::fromUtf8(QJsonDocument(tool.inputSchema)
+                                  .toJson(QJsonDocument::Compact));
+        const QString outputSchema =  // 紧凑显示可选输出 Schema
+            QString::fromUtf8(QJsonDocument(tool.outputSchema)
+                                  .toJson(QJsonDocument::Compact));
+        const QString annotations =  // 紧凑显示工具安全与行为注解
+            QString::fromUtf8(QJsonDocument(tool.annotations)
+                                  .toJson(QJsonDocument::Compact));
+        const QStringList values{tool.name,
+                                 tool.title.value_or(QString{}),
+                                 tool.description.value_or(QString{}),
+                                 inputSchema,
+                                 outputSchema,
+                                 annotations};  // 固定各列对应的展示文本
+        for (int column = 0; column < values.size(); ++column) {  // 创建可复制且带完整提示的单元格
+            auto* item = new QTableWidgetItem(values.at(column));  // 当前工具字段单元格
+            item->setToolTip(values.at(column));
+            m_serverTools->setItem(row, column, item);
+        }
+    }
 }

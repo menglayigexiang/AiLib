@@ -15,7 +15,7 @@ namespace LibMcp::Internal {
 class HttpClientPrivate;  // 隐藏 Qt Network 实现，避免其类型泄漏给 Transport
 
 using HttpDataHandler =
-    std::function<void(const HttpResponse&, const QByteArray&)>;  // 接收响应头和增量正文字节
+    std::function<bool(const HttpResponse&, const QByteArray&)>;  // 消费增量正文，返回 true 表示无需保留该块
 
 // 为内部 Transport 提供精炼的通用 HTTP 请求能力。
 class HttpClient final : public QObject

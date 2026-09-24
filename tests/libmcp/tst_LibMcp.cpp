@@ -5,6 +5,8 @@
 #include <LibMcp/StreamableHttpTransport.h>
 #include <LibMcp/StdioTransport.h>
 
+#include "../../LibMcp/src/http/HttpServer_p.h"
+
 #include <QEventLoop>
 #include <QFutureWatcher>
 #include <QJsonArray>
@@ -95,6 +97,53 @@ private:
     QTcpServer m_server;  // 承载旧协议诊断响应的本地 HTTP 监听器
 };
 
+// 返回可控 SSE 正文，用于验证 Client 对损坏流的拒绝行为。
+class SseResponseServer final : public QObject
+{
+    Q_OBJECT
+public:
+    explicit SseResponseServer(
+        QByteArray responseBody,   // 每个 HTTP 请求要返回的 SSE 正文
+        QObject* parent = nullptr)  // 可选 QObject 所有者
+        : QObject(parent)
+        , m_responseBody(std::move(responseBody))
+    {  // 配置单次请求的回环 SSE 响应器
+        connect(&m_server,
+                &QTcpServer::newConnection,
+                this,
+                [this] {  // 接受新连接并在收到请求后返回固定 SSE
+                    QTcpSocket* socket = m_server.nextPendingConnection();  // 当前待响应的本地连接
+                    connect(socket,
+                            &QTcpSocket::readyRead,
+                            socket,
+                            [this, socket] {  // 消费请求并立即结束 SSE 响应
+                                socket->readAll();
+                                const QByteArray response =  // 构造带明确长度的 event-stream 响应
+                                    QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: ")
+                                    + QByteArray::number(m_responseBody.size())
+                                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n")
+                                    + m_responseBody;
+                                socket->write(response);
+                                socket->disconnectFromHost();
+                            });
+                });
+    }
+
+    bool start()  // 在回环地址启动系统分配端口的监听
+    {
+        return m_server.listen(QHostAddress::LocalHost, 0);
+    }
+
+    quint16 port() const  // 返回实际监听端口
+    {
+        return m_server.serverPort();
+    }
+
+private:
+    QTcpServer m_server;       // 承载测试 SSE 响应的回环监听器
+    QByteArray m_responseBody; // 需要原样返回的 SSE 正文
+};
+
 template<typename T>
 bool waitForFuture(
     QFuture<T> future,  // 需要等待完成的异步结果
@@ -169,9 +218,127 @@ private slots:
     void rejectsInvalidToolSchema();  // 验证工具注册拒绝非法 JSON Schema 2020-12
     void wireMetadataAndDiscover();   // 验证请求级元数据校验与 Server 能力发现
     void statelessHttpProtocol();     // 验证无 Session 的独立 HTTP 请求往返
+    void rejectsMalformedSse_data();  // 准备非法、截断和空 SSE 事件样本
+    void rejectsMalformedSse();       // 验证损坏 SSE 不会被当作成功响应
     void stdioProtocol();             // 验证子进程 STDIO 的逐行 JSON 请求往返
+    void stdioUnexpectedCleanExit();  // 验证非主动的零状态退出仍会报告断连
+    void completedOperationIsReleased();  // 验证完成回调不会强引用 Operation 自身
+    void inMemoryPeerDestruction();       // 验证任一内存传输端销毁后另一端安全失败
+    void httpRequestBytesAreConsumed();   // 验证后续字节不会重复分发已处理的 HTTP 请求
     void inMemoryProtocol();       // 验证工具、资源和提示词的内存协议交互
 };
+
+void LibMcpTest::rejectsMalformedSse_data()  // 准备非法、截断和空 SSE 事件样本
+{
+    QTest::addColumn<QByteArray>("responseBody");
+    QTest::newRow("invalid-json") << QByteArrayLiteral("data: not-json\n\n");
+    QTest::newRow("truncated-event") << QByteArrayLiteral("data: {\"jsonrpc\":\"2.0\"");
+    QTest::newRow("empty-event") << QByteArrayLiteral("\n\n");
+}
+
+void LibMcpTest::rejectsMalformedSse()  // 验证损坏 SSE 不会被当作成功响应
+{
+    QFETCH(QByteArray, responseBody);
+    SseResponseServer server(responseBody);  // 返回当前数据行指定的损坏 SSE
+    QVERIFY(server.start());
+    const QUrl endpoint(  // 指向本地损坏 SSE 响应器的 Endpoint
+        QStringLiteral("http://127.0.0.1:%1/mcp").arg(server.port()));
+    StreamableHttpClientTransport transport(endpoint);  // 直接检查 HTTP Transport 的解析结果
+    McpResult<void> result = McpResult<void>::failure({});  // 保存 Transport 启动与发送结果
+    QVERIFY(waitForFuture(transport.start(), result, 1000));
+    QVERIFY(result.isSuccess());
+    const QJsonObject request{  // 触发 Server 返回 SSE 的最小 MCP 请求
+        {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+        {QStringLiteral("id"), 1},
+        {QStringLiteral("method"), QStringLiteral("tools/list")}};
+    QVERIFY(waitForFuture(transport.sendMessage(request), result, 3000));
+    QVERIFY(result.isError());
+    QCOMPARE(result.error().code, McpErrorCode::InvalidMessage);
+}
+
+void LibMcpTest::stdioUnexpectedCleanExit()  // 验证非主动的零状态退出仍会报告断连
+{
+    StdioClientConfig config;  // 配置启动后立即正常退出的测试子进程
+    config.command = QStringLiteral(LIBMCP_STDIO_TEST_SERVER);
+    config.arguments = {QStringLiteral("--exit-immediately")};
+    StdioClientTransport transport(config);  // 直接观察 Transport 的断连信号
+    QSignalSpy disconnectedSpy(&transport, &McpClientTransport::disconnected);  // 记录意外正常退出通知
+    McpResult<void> startResult = McpResult<void>::failure({});  // 保存子进程启动结果
+    QVERIFY(waitForFuture(transport.start(), startResult, 1000));
+    QVERIFY(startResult.isSuccess());
+    QTRY_COMPARE_WITH_TIMEOUT(disconnectedSpy.count(), 1, 3000);
+    const McpError error = qvariant_cast<McpError>(disconnectedSpy.first().at(0));  // 提取 Transport 归一化后的断连原因
+    QCOMPARE(error.code, McpErrorCode::ConnectionClosed);
+}
+
+void LibMcpTest::completedOperationIsReleased()  // 验证完成回调不会强引用 Operation 自身
+{
+    auto transportPair = createInMemoryTransportPair();  // 提供可完成请求的内存传输对
+    McpServer server(  // 提供空工具列表的最小 Server
+        std::move(transportPair.second),
+        {QStringLiteral("lifetime-server"), QStringLiteral("1.0"), {}});
+    McpClient client(  // 创建被检查 Operation 生命周期的 Client
+        std::move(transportPair.first),
+        {QStringLiteral("lifetime-client"), QStringLiteral("1.0")});
+    constexpr int timeoutMs = 5000;  // 每个异步步骤的最长等待毫秒数
+    McpResult<void> lifecycleResult = McpResult<void>::failure({});  // 保存启停结果
+    QVERIFY(waitForFuture(server.start(), lifecycleResult, timeoutMs));
+    QVERIFY(lifecycleResult.isSuccess());
+    QVERIFY(waitForOperation(client.start(), lifecycleResult, timeoutMs));
+    QVERIFY(lifecycleResult.isSuccess());
+
+    QSharedPointer<McpOperation<QList<McpTool>>> operation = client.listTools();  // 保存待完成的列表操作
+    QWeakPointer<McpOperation<QList<McpTool>>> weakOperation = operation;  // 观察强引用释放后是否销毁
+    McpResult<QList<McpTool>> toolsResult = McpResult<QList<McpTool>>::failure({});  // 保存列表结果
+    QVERIFY(waitForOperation(operation, toolsResult, timeoutMs));
+    QVERIFY(toolsResult.isSuccess());
+    operation.clear();
+    QTRY_VERIFY_WITH_TIMEOUT(weakOperation.isNull(), timeoutMs);
+
+    QVERIFY(waitForOperation(client.stop(), lifecycleResult, timeoutMs));
+    QVERIFY(waitForFuture(server.stop(), lifecycleResult, timeoutMs));
+}
+
+void LibMcpTest::inMemoryPeerDestruction()  // 验证任一内存传输端销毁后另一端安全失败
+{
+    auto transportPair = createInMemoryTransportPair();  // 创建可独立销毁的配对传输
+    McpResult<void> startResult = McpResult<void>::failure({});  // 保存 Client Transport 启动结果
+    QVERIFY(waitForFuture(transportPair.first->start(), startResult, 1000));
+    QVERIFY(startResult.isSuccess());
+    transportPair.second.reset();
+
+    McpResult<void> sendResult = McpResult<void>::success();  // 保存 peer 销毁后的发送结果
+    QVERIFY(waitForFuture(
+        transportPair.first->sendMessage(QJsonObject{}), sendResult, 1000));
+    QVERIFY(sendResult.isError());
+    QCOMPARE(sendResult.error().code, McpErrorCode::ConnectionClosed);
+}
+
+void LibMcpTest::httpRequestBytesAreConsumed()  // 验证后续字节不会重复分发已处理的 HTTP 请求
+{
+    LibMcp::Internal::HttpServer server;  // 保留请求连接以观察重复分发
+    int requestCount = 0;  // 记录上层 Handler 收到的完整请求数
+    server.setRequestHandler(
+        [&requestCount](const LibMcp::Internal::HttpRequestId&,
+                        const LibMcp::Internal::HttpRequest&) {  // 仅记录分发，故意不结束连接
+            ++requestCount;
+        });
+    const McpResult<void> listenResult = server.listen(QHostAddress::LocalHost, 0);  // 启动回环 HTTP 监听
+    QVERIFY(listenResult.isSuccess());
+
+    QTcpSocket socket;  // 发送一个完整请求后再附加无关字节
+    socket.connectToHost(QHostAddress::LocalHost, server.port());
+    QVERIFY(socket.waitForConnected(1000));
+    const QByteArray request =  // 最小的无正文 HTTP POST 请求
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+    QCOMPARE(socket.write(request), request.size());
+    QVERIFY(socket.waitForBytesWritten(1000));
+    QTRY_COMPARE_WITH_TIMEOUT(requestCount, 1, 1000);
+    QCOMPARE(socket.write("x"), 1);
+    QVERIFY(socket.waitForBytesWritten(1000));
+    QTest::qWait(50);
+    QCOMPARE(requestCount, 1);
+}
 
 void LibMcpTest::managerRejectsLegacyProtocol()  // 验证 HTTP 可达但旧协议的 Client 不会进入 Ready
 {
@@ -605,6 +772,17 @@ void LibMcpTest::inMemoryProtocol()  // 验证工具、资源和提示词的内�
                 2,
                 false};
         });
+
+    QCOMPARE(server.serverInfo().name, QStringLiteral("test-server"));
+    QCOMPARE(server.supportedProtocolVersions(),
+             QStringList{QStringLiteral(LIBMCP_PROTOCOL_VERSION)});
+    QVERIFY(server.capabilities().contains(QStringLiteral("tools")));
+    QVERIFY(server.capabilities().contains(QStringLiteral("resources")));
+    QVERIFY(server.capabilities().contains(QStringLiteral("prompts")));
+    QVERIFY(server.capabilities().contains(QStringLiteral("completions")));
+    const QList<McpTool> registeredTools = server.tools();  // 获取稳定排序的公开工具快照
+    QCOMPARE(registeredTools.size(), 3);
+    QCOMPARE(registeredTools.first().name, QStringLiteral("approval"));
 
     McpClient client(  // 通过内存传输访问测试服务端
         std::move(transportPair.first),

@@ -6,6 +6,11 @@
 #include <QProcess>
 
 namespace LibMcp {
+namespace {
+
+constexpr qsizetype maximumStdioFrameBytes = 16 * 1024 * 1024;  // STDIO 单行协议帧的最大字节数
+
+} // namespace
 
 // 保存 STDIO Client 的子进程、配置和 stdout framing 缓冲。
 class StdioClientTransportPrivate
@@ -15,10 +20,20 @@ public:
     StdioClientConfig config;               // 子进程启动配置
     QProcess process;                       // MCP Server 子进程
     QByteArray outputBuffer;                // 尚未完成逐行解析的 stdout 字节
+    bool stopping = false;                  // 当前进程退出是否由 stop 或析构主动发起
 
     void consumeOutput()  // 解析 stdout 中所有完整 JSON 行
     {
         outputBuffer += process.readAllStandardOutput();
+        if (outputBuffer.size() > maximumStdioFrameBytes
+            && !outputBuffer.contains('\n')) {
+            outputBuffer.clear();
+            emit owner->disconnected(
+                {McpErrorCode::InvalidMessage,
+                 QStringLiteral("STDIO stdout 协议帧超过 16 MiB 安全上限")});
+            process.kill();
+            return;
+        }
         while (true) {
             const qsizetype lineEnd = outputBuffer.indexOf('\n');  // 当前完整消息的行结束位置
             if (lineEnd < 0) {
@@ -26,6 +41,13 @@ public:
             }
             const QByteArray line = outputBuffer.left(lineEnd).trimmed();  // 当前完整协议行
             outputBuffer.remove(0, lineEnd + 1);
+            if (line.size() > maximumStdioFrameBytes) {
+                emit owner->disconnected(
+                    {McpErrorCode::InvalidMessage,
+                     QStringLiteral("STDIO stdout 协议帧超过 16 MiB 安全上限")});
+                process.kill();
+                return;
+            }
             if (line.isEmpty()) {
                 continue;
             }
@@ -65,10 +87,14 @@ StdioClientTransport::StdioClientTransport(
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this,
             [this](int exitCode, QProcess::ExitStatus status) {  // 报告非主动停止的子进程退出
-                if (status == QProcess::CrashExit || exitCode != 0) {
-                    emit disconnected(
-                        {McpErrorCode::ConnectionClosed,
-                         QStringLiteral("STDIO Server 已退出，状态码 %1").arg(exitCode)});
+                const bool expectedExit = d->stopping;  // 区分用户主动停止与 Server 自行退出
+                d->stopping = false;
+                if (!expectedExit) {
+                    const QString reason =  // 保留退出码与崩溃状态供诊断
+                        status == QProcess::CrashExit
+                            ? QStringLiteral("STDIO Server 已崩溃，状态码 %1").arg(exitCode)
+                            : QStringLiteral("STDIO Server 已退出，状态码 %1").arg(exitCode);
+                    emit disconnected({McpErrorCode::ConnectionClosed, reason});
                 }
             });
 }
@@ -76,6 +102,7 @@ StdioClientTransport::StdioClientTransport(
 StdioClientTransport::~StdioClientTransport()  // 停止子进程并释放管道资源
 {
     if (d->process.state() != QProcess::NotRunning) {
+        d->stopping = true;
         d->process.kill();
         d->process.waitForFinished(1000);
     }
@@ -86,6 +113,7 @@ QFuture<McpResult<void>> StdioClientTransport::start()  // 启动 Server 子进�
     if (d->process.state() != QProcess::NotRunning) {
         return Internal::readyFuture(McpResult<void>::success());
     }
+    d->stopping = false;
     if (d->config.command.trimmed().isEmpty()) {
         return Internal::readyFuture(McpResult<void>::failure(
             {McpErrorCode::TransportError,
@@ -117,6 +145,7 @@ QFuture<McpResult<void>> StdioClientTransport::stop()  // 终止 Server 子进�
     if (d->process.state() == QProcess::NotRunning) {
         return Internal::readyFuture(McpResult<void>::success());
     }
+    d->stopping = true;
     d->process.terminate();
     if (!d->process.waitForFinished(2000)) {
         d->process.kill();

@@ -59,6 +59,11 @@ public:
         QObject *parent = nullptr);                     // 创建指定身份的无状态 Server
     ~McpServer() override;                              // 释放注册表和 Transport
 
+    ServerInfo serverInfo() const;                      // 返回 Server 对外声明的身份信息
+    QStringList supportedProtocolVersions() const;      // 返回当前实现支持的协议版本
+    QJsonObject capabilities() const;                   // 返回根据注册表生成的能力声明
+    QList<McpTool> tools() const;                       // 返回按名称排序的已注册工具快照
+
     /// 注册一个 Tool；名称重复、名称为空或函数为空时返回 false。
     bool addTool(const McpTool &tool, McpToolFunction function);  // 注册工具并校验输入输出 Schema
     /// 注册一个固定 URI Resource。
@@ -82,6 +87,7 @@ public:
     bool isRunning() const;                                 // 查询 Server Transport 是否已启动
 
 signals:
+    void capabilitiesChanged();                         // 通知注册表或能力声明已经改变
     /// 一个已通过元数据校验的无状态请求开始分发。
     void requestStarted(
         const QString& method,                    // 请求方法

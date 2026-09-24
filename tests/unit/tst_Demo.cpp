@@ -7,12 +7,16 @@
 #include "../../TestApp/LibMcp/LibMcpPage.h"
 #include "../../TestApp/LibMcp/McpClientConfigDialog.h"
 #include "../../TestApp/LibMcp/McpClientWorkbench.h"
+#include "../../TestApp/LibMcp/TestServerTools.h"
 #include <LibMcp/McpServer.h>
 #include <LibMcp/StreamableHttpTransport.h>
+#include <QHeaderView>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QScrollArea>
 #include <QSplitter>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -101,11 +105,15 @@ private slots:
             page.findChild<QPushButton*>(QStringLiteral("addMcpClientButton"));
         auto* clientTable =  // 展示 Client 配置、状态和行内操作的表格
             page.findChild<QTableWidget*>(QStringLiteral("mcpClientTable"));
+        auto* selectedClient =  // 显示配置表当前行对应的调试目标
+            page.findChild<QLabel*>(QStringLiteral("mcpWorkbenchSelectedClient"));
         auto* serverStatus =  // 展示 Server 最终运行状态的文本
             page.findChild<QLabel*>(QStringLiteral("mcpServerStatusLabel"));
         auto* recentRequests =  // 展示最近请求 ClientInfo 和结果的表格
             page.findChild<QTableWidget*>(QStringLiteral("mcpRecentRequestsTable"));
-        auto* tabs = page.findChild<QTabWidget*>(QStringLiteral("mcpTabs"));  // 承载配置、调试和 Server 页面
+        auto* tabs = page.findChild<QTabWidget*>(QStringLiteral("mcpTabs"));  // 承载融合后的 Client 和 Server 页面
+        auto* clientScrollArea =  // 小窗口中滚动 Client 配置与调试内容
+            page.findChild<QScrollArea*>(QStringLiteral("mcpClientScrollArea"));
         auto* discover =  // 发起无状态 Server 能力发现
             page.findChild<QPushButton*>(QStringLiteral("mcpDiscoverButton"));
         auto* loadTools =  // 加载完整工具列表
@@ -124,11 +132,28 @@ private slots:
             page.findChild<QSplitter*>(QStringLiteral("mcpWorkbenchContentSplitter"));
         auto* detailTabs =  // 分离 Schema 与调用结果以扩大阅读区域
             page.findChild<QTabWidget*>(QStringLiteral("mcpToolDetailTabs"));
+        auto* serverDetailsTabs =  // 分离服务描述与请求监控
+            page.findChild<QTabWidget*>(QStringLiteral("mcpServerDetailsTabs"));
+        auto* serverVersions =  // 显示 Server 支持的协议版本
+            page.findChild<QLabel*>(QStringLiteral("mcpServerSupportedVersionsLabel"));
+        auto* serverCapabilities =  // 显示 Server 当前能力声明
+            page.findChild<QPlainTextEdit*>(QStringLiteral("mcpServerCapabilitiesOutput"));
+        auto* serverTools =  // 显示 Server 已注册工具信息
+            page.findChild<QTableWidget*>(QStringLiteral("mcpServerToolsTable"));
+        auto* serverPort =  // 使用系统分配端口避免测试端口冲突
+            page.findChild<QSpinBox*>(QStringLiteral("mcpServerPortSpin"));
+        auto* startServer =  // 启动受控 TestApp Server
+            page.findChild<QPushButton*>(QStringLiteral("startMcpServerButton"));
+        auto* stopServer =  // 停止受控 TestApp Server
+            page.findChild<QPushButton*>(QStringLiteral("stopMcpServerButton"));
         QVERIFY(addButton);
         QVERIFY(clientTable);
+        QVERIFY(selectedClient);
+        QVERIFY(!page.findChild<QWidget*>(QStringLiteral("mcpWorkbenchClientSelector")));
         QVERIFY(serverStatus);
         QVERIFY(recentRequests);
         QVERIFY(tabs);
+        QVERIFY(clientScrollArea);
         QVERIFY(discover);
         QVERIFY(loadTools);
         QVERIFY(callTool);
@@ -138,18 +163,50 @@ private slots:
         QVERIFY(pageSplitter);
         QVERIFY(contentSplitter);
         QVERIFY(detailTabs);
+        QVERIFY(serverDetailsTabs);
+        QVERIFY(serverVersions);
+        QVERIFY(serverCapabilities);
+        QVERIFY(serverTools);
+        QVERIFY(serverPort);
+        QVERIFY(startServer);
+        QVERIFY(stopServer);
         QCOMPARE(pageSplitter->orientation(), Qt::Vertical);
         QCOMPARE(contentSplitter->orientation(), Qt::Horizontal);
         QCOMPARE(detailTabs->count(), 2);
         QCOMPARE(detailTabs->currentIndex(), 1);
-        QCOMPARE(tabs->count(), 3);
-        QCOMPARE(tabs->tabText(1), QStringLiteral("Client 调试"));
+        QCOMPARE(serverDetailsTabs->count(), 2);
+        QCOMPARE(serverTools->columnCount(), 6);
+        QVERIFY(serverVersions->text().contains(QStringLiteral("2026-07-28")));
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(tabs->tabText(0), QStringLiteral("Client"));
+        QCOMPARE(tabs->tabText(1), QStringLiteral("Server"));
+        QVERIFY(clientScrollArea->widgetResizable());
+        QCOMPARE(clientScrollArea->horizontalScrollBarPolicy(), Qt::ScrollBarAlwaysOff);
+        const int expectedClientTableHeight =  // 验证表头、三行内容和边框构成固定列表高度
+            clientTable->horizontalHeader()->sizeHint().height()
+            + clientTable->verticalHeader()->defaultSectionSize() * 3
+            + clientTable->frameWidth() * 2;
+        QCOMPARE(clientTable->minimumHeight(), expectedClientTableHeight);
+        QCOMPARE(clientTable->maximumHeight(), expectedClientTableHeight);
         QVERIFY(!discover->isEnabled());
         QVERIFY(!loadTools->isEnabled());
         QVERIFY(!callTool->isEnabled());
         QCOMPARE(clientTable->columnCount(), 7);
         QCOMPARE(recentRequests->columnCount(), 5);
         QVERIFY(!page.findChild<QWidget*>(QStringLiteral("connectedClients")));
+
+        serverPort->setValue(0);
+        startServer->click();
+        QTRY_COMPARE_WITH_TIMEOUT(serverStatus->text(), QStringLiteral("运行中"), 3000);
+        QCOMPARE(serverTools->rowCount(), 5);
+        QCOMPARE(serverTools->item(0, 0)->text(), QStringLiteral("calculate_sum"));
+        QCOMPARE(serverTools->item(1, 0)->text(), QStringLiteral("current_time"));
+        QCOMPARE(serverTools->item(2, 0)->text(), QStringLiteral("echo"));
+        QCOMPARE(serverTools->item(3, 0)->text(), QStringLiteral("get_weather"));
+        QCOMPARE(serverTools->item(4, 0)->text(), QStringLiteral("simulate_error"));
+        QVERIFY(serverCapabilities->toPlainText().contains(QStringLiteral("tools")));
+        stopServer->click();
+        QTRY_COMPARE_WITH_TIMEOUT(serverStatus->text(), QStringLiteral("已停止"), 3000);
     }
 
     void mcpWorkbenchCompletesRealHttpFlow()  // 通过真实本地 HTTP 完成发现、工具列表和工具调用
@@ -164,22 +221,7 @@ private slots:
             {QStringLiteral("ui-test-server"),
              QStringLiteral("1.0.0"),
              QStringLiteral("UI Test Server")});  // 提供工作台端到端测试 Server
-        LibMcp::McpTool echoTool;  // 声明可使用对象参数调用的回显工具
-        echoTool.name = QStringLiteral("echo");
-        echoTool.description = QStringLiteral("回显参数");
-        echoTool.inputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
-        echoTool.outputSchema = {{QStringLiteral("type"), QStringLiteral("object")}};
-        QVERIFY(server.addTool(
-            echoTool,
-            [](const LibMcp::McpToolCallRequest& request,
-               const LibMcp::McpRequestContext&) {  // 返回结构化参数供界面断言
-                LibMcp::McpToolCallResult result;  // 保存工具调用的结构化成功结果
-                result.structuredContent = request.arguments;
-                result.content = QJsonArray{QJsonObject{
-                    {QStringLiteral("type"), QStringLiteral("text")},
-                    {QStringLiteral("text"), QStringLiteral("ok")}}};
-                return result;
-            }));
+        QVERIFY(registerTestServerTools(server));
         LibMcp::McpResource resource;  // 声明由 Manager 自动加载的固定资源
         resource.name = QStringLiteral("status");
         resource.uri = QStringLiteral("test://status");
@@ -232,7 +274,7 @@ private slots:
         QCOMPARE(manager.clientProtocolState(config.id),
                  LibMcp::McpClientManager::ProtocolState::Compatible);
         QVERIFY(manager.clientEnabled(config.id));
-        QCOMPARE(manager.clientTools(config.id).size(), 1);
+        QCOMPARE(manager.clientTools(config.id).size(), 5);
         QCOMPARE(manager.clientResources(config.id).size(), 1);
         QCOMPARE(manager.clientResourceTemplates(config.id).size(), 1);
         QCOMPARE(manager.clientPrompts(config.id).size(), 1);
@@ -246,7 +288,15 @@ private slots:
         auto* discoveryOutput = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpDiscoveryOutput"));  // 能力发现输出
         auto* loadTools = workbench.findChild<QPushButton*>(QStringLiteral("mcpLoadToolsButton"));  // 工具列表按钮
         auto* connectionState = workbench.findChild<QLabel*>(QStringLiteral("mcpWorkbenchConnectionState"));  // 当前协议操作状态
+        auto* selectedClient = workbench.findChild<QLabel*>(QStringLiteral("mcpWorkbenchSelectedClient"));  // 配置列表选中的调试目标
+        auto* toolCount = workbench.findChild<QLabel*>(QStringLiteral("mcpToolCount"));  // 当前工具过滤数量
+        auto* toolSearch = workbench.findChild<QLineEdit*>(QStringLiteral("mcpToolSearch"));  // 工具名称与说明搜索框
         auto* toolTable = workbench.findChild<QTableWidget*>(QStringLiteral("mcpToolTable"));  // 工具列表表格
+        auto* toolDescription = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpToolDescription"));  // 固定高度工具说明
+        auto* schemaTabs = workbench.findChild<QTabWidget*>(QStringLiteral("mcpSchemaTabs"));  // 完整宽度 Schema 标签页
+        auto* inputSchema = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpToolInputSchema"));  // 输入 Schema 文本
+        auto* outputSchema = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpToolOutputSchema"));  // 输出 Schema 文本
+        auto* copySchema = workbench.findChild<QPushButton*>(QStringLiteral("mcpCopySchemaButton"));  // 当前 Schema 复制按钮
         auto* arguments = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpToolArguments"));  // 工具参数编辑器
         auto* callTool = workbench.findChild<QPushButton*>(QStringLiteral("mcpCallToolButton"));  // 工具调用按钮
         auto* resultOutput = workbench.findChild<QPlainTextEdit*>(QStringLiteral("mcpToolResultOutput"));  // 工具结果输出
@@ -254,28 +304,72 @@ private slots:
         QVERIFY(discoveryOutput);
         QVERIFY(loadTools);
         QVERIFY(connectionState);
+        QVERIFY(selectedClient);
+        QVERIFY(toolCount);
+        QVERIFY(toolSearch);
         QVERIFY(toolTable);
+        QVERIFY(toolDescription);
+        QVERIFY(schemaTabs);
+        QVERIFY(inputSchema);
+        QVERIFY(outputSchema);
+        QVERIFY(copySchema);
         QVERIFY(arguments);
         QVERIFY(callTool);
         QVERIFY(resultOutput);
 
         QVERIFY(discoveryOutput->toPlainText().contains(QStringLiteral("2026-07-28")));
+        QCOMPARE(selectedClient->text(), config.name);
+        QCOMPARE(toolTable->rowCount(), 5);
+        QCOMPARE(toolTable->columnCount(), 1);
+        QCOMPARE(toolTable->item(0, 0)->text(), QStringLiteral("calculate_sum"));
+        QCOMPARE(toolCount->text(), QStringLiteral("工具（5）"));
+        QVERIFY(toolTable->wordWrap());
+        QCOMPARE(toolTable->verticalHeader()->sectionResizeMode(0),
+                 QHeaderView::ResizeToContents);
+        QCOMPARE(schemaTabs->count(), 2);
+        QCOMPARE(schemaTabs->tabText(0), QStringLiteral("Input Schema"));
+        QCOMPARE(schemaTabs->tabText(1), QStringLiteral("Output Schema"));
+        QCOMPARE(inputSchema->lineWrapMode(), QPlainTextEdit::NoWrap);
+        QCOMPARE(outputSchema->lineWrapMode(), QPlainTextEdit::NoWrap);
+        toolSearch->setText(QStringLiteral("不存在"));
+        QCOMPARE(toolTable->rowCount(), 0);
+        QCOMPARE(toolCount->text(), QStringLiteral("工具（0/5）"));
+        toolSearch->clear();
+        QCOMPARE(toolTable->rowCount(), 5);
+        toolSearch->setText(QStringLiteral("echo"));
         QCOMPARE(toolTable->rowCount(), 1);
-        QCOMPARE(toolTable->item(0, 0)->text(), QStringLiteral("echo"));
+        QVERIFY(toolDescription->toPlainText().contains(QStringLiteral("参数回显")));
         discover->click();
         QTRY_VERIFY_WITH_TIMEOUT(
             connectionState->text() == QStringLiteral("协议发现成功"),
             5000);
-        toolTable->selectRow(0);
-        QTest::mouseClick(toolTable->viewport(),
-                          Qt::LeftButton,
-                          Qt::NoModifier,
-                          toolTable->visualItemRect(toolTable->item(0, 0)).center());
+        toolTable->setCurrentCell(0, 0);
         arguments->setPlainText(QStringLiteral("{\"city\":\"北京\"}"));
         callTool->click();
         QTRY_VERIFY_WITH_TIMEOUT(
             resultOutput->toPlainText().contains(QStringLiteral("北京")),
             5000);
+
+        const auto sumOperation = manager.client(config.id)->callTool(  // 验证必填数值与结构化输出工具
+            QStringLiteral("calculate_sum"),
+            QJsonObject{{QStringLiteral("a"), 12.5},
+                        {QStringLiteral("b"), 7.5}});
+        QTRY_VERIFY_WITH_TIMEOUT(sumOperation->isFinished(), 5000);
+        QCOMPARE(sumOperation->status(), LibMcp::McpOperationBase::Status::Succeeded);
+        QVERIFY(sumOperation->result().has_value());
+        QCOMPARE(sumOperation->result()->structuredContent
+                     .toObject()
+                     .value(QStringLiteral("sum"))
+                     .toDouble(),
+                 20.0);
+
+        const auto errorOperation = manager.client(config.id)->callTool(  // 验证工具业务错误不会变成协议错误
+            QStringLiteral("simulate_error"),
+            QJsonObject{{QStringLiteral("message"), QStringLiteral("测试失败")}});
+        QTRY_VERIFY_WITH_TIMEOUT(errorOperation->isFinished(), 5000);
+        QCOMPARE(errorOperation->status(), LibMcp::McpOperationBase::Status::Succeeded);
+        QVERIFY(errorOperation->result().has_value());
+        QVERIFY(errorOperation->result()->isError);
 
         const auto clientStop = manager.stopClient(config.id);  // 正常停止测试 Client
         QTRY_VERIFY_WITH_TIMEOUT(clientStop->isFinished(), 3000);

@@ -1,13 +1,15 @@
 #include "McpClientWorkbench.h"
 
-#include <QComboBox>
+#include <QClipboard>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
@@ -123,10 +125,10 @@ McpClientWorkbench::McpClientWorkbench(
       m_manager(manager)
 {
     auto* root = new QVBoxLayout(this);  // 按 Client、发现区和工具区组织页面
-    auto* clientBar = new QHBoxLayout();  // 将 Client 选择与协议操作放在首行
-    auto* clientLabel = new QLabel(QStringLiteral("Client"), this);  // 标注当前操作目标
-    m_clientSelector = new QComboBox(this);
-    m_clientSelector->setObjectName(QStringLiteral("mcpWorkbenchClientSelector"));
+    auto* clientBar = new QHBoxLayout();  // 将当前 Client 与协议操作放在首行
+    auto* clientLabel = new QLabel(QStringLiteral("当前 Client"), this);  // 标注配置列表当前选择
+    m_selectedClientName = new QLabel(QStringLiteral("未选择"), this);
+    m_selectedClientName->setObjectName(QStringLiteral("mcpWorkbenchSelectedClient"));
     m_connectionState = new QLabel(this);
     m_connectionState->setObjectName(QStringLiteral("mcpWorkbenchConnectionState"));
     m_discoverButton = new QPushButton(QStringLiteral("发现 Server"), this);
@@ -134,8 +136,10 @@ McpClientWorkbench::McpClientWorkbench(
     m_loadToolsButton = new QPushButton(QStringLiteral("加载工具"), this);
     m_loadToolsButton->setObjectName(QStringLiteral("mcpLoadToolsButton"));
     clientBar->addWidget(clientLabel);
-    clientBar->addWidget(m_clientSelector, 1);
+    clientBar->addWidget(m_selectedClientName);
+    clientBar->addSpacing(12);
     clientBar->addWidget(m_connectionState);
+    clientBar->addStretch();
     clientBar->addWidget(m_discoverButton);
     clientBar->addWidget(m_loadToolsButton);
     root->addLayout(clientBar);
@@ -150,48 +154,66 @@ McpClientWorkbench::McpClientWorkbench(
     auto* contentSplitter = new QSplitter(Qt::Horizontal, this);  // 允许调整工具列表与调用详情宽度
     contentSplitter->setObjectName(QStringLiteral("mcpWorkbenchContentSplitter"));
     auto* toolsPanel = new QWidget(contentSplitter);  // 承载可选择的工具列表
-    auto* toolsLayout = new QVBoxLayout(toolsPanel);  // 标题下方填满工具表
-    toolsLayout->addWidget(new QLabel(QStringLiteral("工具列表"), toolsPanel));
-    m_toolTable = new QTableWidget(0, 2, toolsPanel);
+    toolsPanel->setMinimumWidth(240);
+    auto* toolsLayout = new QVBoxLayout(toolsPanel);  // 搜索栏下方填满紧凑工具名称列表
+    auto* toolsHeader = new QHBoxLayout();  // 并排显示工具数量和搜索入口
+    m_toolCount = new QLabel(QStringLiteral("工具（0）"), toolsPanel);
+    m_toolCount->setObjectName(QStringLiteral("mcpToolCount"));
+    m_toolSearch = new QLineEdit(toolsPanel);
+    m_toolSearch->setObjectName(QStringLiteral("mcpToolSearch"));
+    m_toolSearch->setPlaceholderText(QStringLiteral("搜索工具名称或说明…"));
+    m_toolSearch->setClearButtonEnabled(true);
+    toolsHeader->addWidget(m_toolCount);
+    toolsHeader->addWidget(m_toolSearch, 1);
+    toolsLayout->addLayout(toolsHeader);
+    m_toolTable = new QTableWidget(0, 1, toolsPanel);
     m_toolTable->setObjectName(QStringLiteral("mcpToolTable"));
-    m_toolTable->setHorizontalHeaderLabels(
-        {QStringLiteral("名称"), QStringLiteral("说明")});
-    m_toolTable->horizontalHeader()->setSectionResizeMode(
-        0, QHeaderView::ResizeToContents);
-    m_toolTable->horizontalHeader()->setSectionResizeMode(
-        1, QHeaderView::Stretch);
+    m_toolTable->setHorizontalHeaderLabels({QStringLiteral("名称")});
+    m_toolTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_toolTable->verticalHeader()->setVisible(false);
+    m_toolTable->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_toolTable->setWordWrap(true);
     m_toolTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_toolTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_toolTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     toolsLayout->addWidget(m_toolTable, 1);
 
     auto* detailPanel = new QWidget(contentSplitter);  // 承载工具详情、输入和调用结果
+    detailPanel->setMinimumWidth(420);
     auto* detailLayout = new QVBoxLayout(detailPanel);  // 按阅读与操作顺序排列工具调用流程
-    m_toolDescription = new QLabel(
+    m_toolDescription = new QPlainTextEdit(
         QStringLiteral("请先加载并选择一个工具。"), detailPanel);
     m_toolDescription->setObjectName(QStringLiteral("mcpToolDescription"));
-    m_toolDescription->setWordWrap(true);
+    m_toolDescription->setReadOnly(true);
+    m_toolDescription->setMaximumHeight(88);
+    m_toolDescription->setPlaceholderText(QStringLiteral("选择工具后显示标题和完整说明。"));
     detailLayout->addWidget(m_toolDescription);
 
     auto* detailTabs = new QTabWidget(detailPanel);  // 分页提供充足的 Schema 与调用结果阅读空间
     detailTabs->setObjectName(QStringLiteral("mcpToolDetailTabs"));
-    auto* schemaPage = new QWidget(detailTabs);  // 承载输入和输出 Schema
-    auto* schemaLayout = new QHBoxLayout(schemaPage);  // 并排显示输入和输出 Schema
-    auto* inputSchemaGroup = new QGroupBox(QStringLiteral("Input Schema"), schemaPage);  // 输入约束分组
-    auto* inputSchemaLayout = new QVBoxLayout(inputSchemaGroup);  // 填满输入 Schema 文本
-    m_inputSchema = new QPlainTextEdit(inputSchemaGroup);
+    auto* schemaPage = new QWidget(detailTabs);  // 使用完整宽度承载 Schema 标签和复制操作
+    auto* schemaLayout = new QVBoxLayout(schemaPage);  // 工具栏下方填满当前 Schema
+    auto* schemaBar = new QHBoxLayout();  // 将说明与当前 Schema 复制操作分置两端
+    auto* schemaHint = new QLabel(QStringLiteral("Schema 已格式化显示，不自动换行。"), schemaPage);  // 说明阅读方式
+    auto* copySchemaButton = new QPushButton(QStringLiteral("复制当前 Schema"), schemaPage);  // 复制当前标签页 JSON
+    copySchemaButton->setObjectName(QStringLiteral("mcpCopySchemaButton"));
+    schemaBar->addWidget(schemaHint);
+    schemaBar->addStretch();
+    schemaBar->addWidget(copySchemaButton);
+    schemaLayout->addLayout(schemaBar);
+    m_schemaTabs = new QTabWidget(schemaPage);
+    m_schemaTabs->setObjectName(QStringLiteral("mcpSchemaTabs"));
+    m_inputSchema = new QPlainTextEdit(m_schemaTabs);
     m_inputSchema->setObjectName(QStringLiteral("mcpToolInputSchema"));
     m_inputSchema->setReadOnly(true);
-    inputSchemaLayout->addWidget(m_inputSchema);
-    auto* outputSchemaGroup = new QGroupBox(QStringLiteral("Output Schema"), schemaPage);  // 输出约束分组
-    auto* outputSchemaLayout = new QVBoxLayout(outputSchemaGroup);  // 填满输出 Schema 文本
-    m_outputSchema = new QPlainTextEdit(outputSchemaGroup);
+    m_inputSchema->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_outputSchema = new QPlainTextEdit(m_schemaTabs);
     m_outputSchema->setObjectName(QStringLiteral("mcpToolOutputSchema"));
     m_outputSchema->setReadOnly(true);
-    outputSchemaLayout->addWidget(m_outputSchema);
-    schemaLayout->addWidget(inputSchemaGroup);
-    schemaLayout->addWidget(outputSchemaGroup);
+    m_outputSchema->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_schemaTabs->addTab(m_inputSchema, QStringLiteral("Input Schema"));
+    m_schemaTabs->addTab(m_outputSchema, QStringLiteral("Output Schema"));
+    schemaLayout->addWidget(m_schemaTabs, 1);
     detailTabs->addTab(schemaPage, QStringLiteral("Schema"));
 
     auto* callPage = new QWidget(detailTabs);  // 承载参数、补充输入和大尺寸结果区域
@@ -251,8 +273,9 @@ McpClientWorkbench::McpClientWorkbench(
 
     contentSplitter->addWidget(toolsPanel);
     contentSplitter->addWidget(detailPanel);
-    contentSplitter->setStretchFactor(0, 1);
-    contentSplitter->setStretchFactor(1, 2);
+    contentSplitter->setStretchFactor(0, 0);
+    contentSplitter->setStretchFactor(1, 1);
+    contentSplitter->setSizes({300, 700});
 
     auto* pageSplitter = new QSplitter(Qt::Vertical, this);  // 允许压缩发现信息以扩大工具调试区域
     pageSplitter->setObjectName(QStringLiteral("mcpWorkbenchPageSplitter"));
@@ -263,14 +286,6 @@ McpClientWorkbench::McpClientWorkbench(
     pageSplitter->setSizes({120, 480});
     root->addWidget(pageSplitter, 1);
 
-    connect(m_clientSelector,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            [this](int) {  // 切换 Client 时丢弃旧工具快照并更新操作状态
-                resetToolDetails();
-                m_connectionState->clear();
-                updateControls();
-            });
     connect(m_discoverButton,
             &QPushButton::clicked,
             this,
@@ -279,10 +294,26 @@ McpClientWorkbench::McpClientWorkbench(
             &QPushButton::clicked,
             this,
             [this] { loadTools(); });
-    connect(m_toolTable,
-            &QTableWidget::cellClicked,
+    connect(m_toolSearch,
+            &QLineEdit::textChanged,
             this,
-            [this](int row, int) { selectTool(row); });
+            [this](const QString&) { filterTools(); });  // 输入时立即过滤名称和说明
+    connect(m_toolTable,
+            &QTableWidget::currentCellChanged,
+            this,
+            [this](int currentRow, int, int, int) {  // 鼠标、键盘和代码选择统一刷新详情
+                selectTool(currentRow);
+            });
+    connect(copySchemaButton,
+            &QPushButton::clicked,
+            this,
+            [this] {  // 将当前可见 Schema 原样复制到系统剪贴板
+                const QPlainTextEdit* editor =  // 当前需要复制的 Schema 编辑器
+                    m_schemaTabs->currentIndex() == 0
+                    ? m_inputSchema
+                    : m_outputSchema;
+                QGuiApplication::clipboard()->setText(editor->toPlainText());
+            });
     connect(m_callButton,
             &QPushButton::clicked,
             this,
@@ -298,28 +329,39 @@ McpClientWorkbench::McpClientWorkbench(
     refreshClients();
 }
 
-void McpClientWorkbench::refreshClients()  // 按 Manager 当前状态刷新 Client 选择和操作可用性
+void McpClientWorkbench::setSelectedClientId(
+    const QString& id)  // 使用配置列表选中的 Client 作为调试目标
 {
-    const QString previousId = selectedClientId();  // 保留刷新前选择的配置 ID
-    m_clientSelector->blockSignals(true);
-    m_clientSelector->clear();
+    if (m_selectedClientId == id) {
+        refreshClients();
+        return;
+    }
+    m_selectedClientId = id;
+    resetToolDetails();
+    m_connectionState->clear();
+    refreshClients();
+}
+
+void McpClientWorkbench::refreshClients()  // 按 Manager 当前状态刷新选中 Client 与操作可用性
+{
     const QList<McpClientConfig> configs = m_manager->configs();  // 获取当前配置快照
-    for (const McpClientConfig& config : configs) {  // 逐项显示配置名称和最终连接状态
-        const bool ready =  // 只有完整协议启用流程成功才允许调试操作
-            m_manager->clientState(config.id)
-            == McpClientManager::ClientState::Ready;
-        m_clientSelector->addItem(
-            QStringLiteral("%1（%2）")
-                .arg(config.name,
-                     ready ? QStringLiteral("可用")
-                           : QStringLiteral("不可用")),
-            config.id);
+    auto selectedConfig = configs.cend();  // 查找配置列表当前选择对应的配置
+    for (auto config = configs.cbegin(); config != configs.cend(); ++config) {  // 保留仍然存在的选择
+        if (config->id == m_selectedClientId) {
+            selectedConfig = config;
+            break;
+        }
     }
-    const int previousIndex = m_clientSelector->findData(previousId);  // 恢复仍然存在的选择
-    if (previousIndex >= 0) {
-        m_clientSelector->setCurrentIndex(previousIndex);
+    if (selectedConfig == configs.cend() && !configs.isEmpty()) {
+        selectedConfig = configs.cbegin();
+        m_selectedClientId = selectedConfig->id;
+    } else if (selectedConfig == configs.cend()) {
+        m_selectedClientId.clear();
     }
-    m_clientSelector->blockSignals(false);
+    m_selectedClientName->setText(
+        selectedConfig == configs.cend()
+            ? QStringLiteral("未选择")
+            : selectedConfig->name);
     resetToolDetails();
     if (selectedClient()) {
         showTools(m_manager->clientTools(selectedClientId()));
@@ -354,7 +396,7 @@ McpClient* McpClientWorkbench::selectedClient() const  // 返回当前选择且�
 
 QString McpClientWorkbench::selectedClientId() const  // 返回当前选择的 Client 配置 ID
 {
-    return m_clientSelector->currentData().toString();
+    return m_selectedClientId;
 }
 
 void McpClientWorkbench::discoverServer()  // 发送 server/discover 并显示能力结果
@@ -420,28 +462,74 @@ void McpClientWorkbench::showTools(
     const QList<McpTool>& tools)  // 使用工具快照重建列表与默认详情
 {                                // 集中维护工具快照、表格行和默认选中项的一致性
     m_tools = tools;
-    m_toolTable->setRowCount(m_tools.size());
-    for (int row = 0; row < m_tools.size(); ++row) {  // 将每个工具映射到一行
-        const McpTool& tool = m_tools.at(row);  // 当前需要展示的工具描述
-        m_toolTable->setItem(row, 0, new QTableWidgetItem(tool.name));
-        m_toolTable->setItem(
-            row,
-            1,
-            new QTableWidgetItem(tool.description.value_or(QString{})));
+    filterTools();
+}
+
+void McpClientWorkbench::filterTools()  // 按搜索文本重建紧凑工具名称列表
+{
+    const QString filter = m_toolSearch->text().trimmed();  // 当前名称或说明过滤文本
+    m_visibleToolIndexes.clear();
+    for (int index = 0; index < m_tools.size(); ++index) {  // 收集匹配工具在完整快照中的索引
+        const McpTool& tool = m_tools.at(index);  // 当前参与过滤的工具描述
+        const QString description = tool.description.value_or(QString{});  // 可搜索的工具说明
+        const QString title = tool.title.value_or(QString{});  // 可搜索的人类可读标题
+        if (filter.isEmpty()
+            || tool.name.contains(filter, Qt::CaseInsensitive)
+            || title.contains(filter, Qt::CaseInsensitive)
+            || description.contains(filter, Qt::CaseInsensitive)) {
+            m_visibleToolIndexes.append(index);
+        }
     }
-    if (!m_tools.isEmpty()) {
-        m_toolTable->selectRow(0);
+
+    m_toolTable->blockSignals(true);
+    m_toolTable->setRowCount(m_visibleToolIndexes.size());
+    for (int row = 0; row < m_visibleToolIndexes.size(); ++row) {  // 用单列名称重建紧凑列表
+        const McpTool& tool = m_tools.at(m_visibleToolIndexes.at(row));  // 当前可见工具
+        auto* item = new QTableWidgetItem(tool.name);  // 显示名称并通过提示保留完整说明
+        item->setToolTip(
+            tool.description.value_or(QStringLiteral("没有说明。")));
+        m_toolTable->setItem(row, 0, item);
+    }
+    m_toolTable->blockSignals(false);
+    m_toolCount->setText(
+        filter.isEmpty()
+            ? QStringLiteral("工具（%1）").arg(m_tools.size())
+            : QStringLiteral("工具（%1/%2）")
+                  .arg(m_visibleToolIndexes.size())
+                  .arg(m_tools.size()));
+    if (!m_visibleToolIndexes.isEmpty()) {
+        m_toolTable->setCurrentCell(0, 0);
         selectTool(0);
+    } else {
+        m_toolDescription->setPlainText(
+            m_tools.isEmpty()
+                ? QStringLiteral("当前 Client 没有可用工具。")
+                : QStringLiteral("没有匹配的工具。"));
+        m_inputSchema->clear();
+        m_outputSchema->clear();
+        m_arguments->setPlainText(QStringLiteral("{}"));
+        m_resultOutput->clear();
+        updateControls();
     }
 }
 
-void McpClientWorkbench::selectTool(int row)  // 展示指定行工具的描述和 Schema
+int McpClientWorkbench::selectedToolIndex() const  // 返回当前可见行对应的原始工具索引
 {
-    if (row < 0 || row >= m_tools.size()) {
+    const int row = m_toolTable->currentRow();  // 当前工具列表选择行
+    return row >= 0 && row < m_visibleToolIndexes.size()
+        ? m_visibleToolIndexes.at(row)
+        : -1;
+}
+
+void McpClientWorkbench::selectTool(int row)  // 展示指定可见行工具的描述和 Schema
+{
+    if (row < 0 || row >= m_visibleToolIndexes.size()) {
+        updateControls();
         return;
     }
-    const McpTool& tool = m_tools.at(row);  // 读取所选工具的稳定快照
-    m_toolDescription->setText(
+    const int toolIndex = m_visibleToolIndexes.at(row);  // 映射到完整工具快照索引
+    const McpTool& tool = m_tools.at(toolIndex);  // 读取所选工具的稳定快照
+    m_toolDescription->setPlainText(
         QStringLiteral("%1\n%2")
             .arg(tool.title.value_or(tool.name),
                  tool.description.value_or(QStringLiteral("没有说明。"))));
@@ -463,8 +551,8 @@ void McpClientWorkbench::selectTool(int row)  // 展示指定行工具的描述�
 void McpClientWorkbench::callSelectedTool(bool retry)  // 调用工具或携带补充输入重试
 {
     McpClient* client = selectedClient();  // 固定本次调用使用的运行 Client
-    const int row = m_toolTable->currentRow();  // 获取当前工具行
-    if (!client || row < 0 || row >= m_tools.size() || m_toolCallOperation) {
+    const int toolIndex = selectedToolIndex();  // 获取当前可见行对应的工具索引
+    if (!client || toolIndex < 0 || m_toolCallOperation) {
         return;
     }
     QJsonObject arguments;  // 保存经过语法校验的工具参数
@@ -478,7 +566,7 @@ void McpClientWorkbench::callSelectedTool(bool retry)  // 调用工具或携带�
                         &inputResponses)) {
         return;
     }
-    const QString toolName = m_tools.at(row).name;  // 固定操作完成前的工具名称
+    const QString toolName = m_tools.at(toolIndex).name;  // 固定操作完成前的工具名称
     m_resultOutput->clear();
     m_callState->setText(retry ? QStringLiteral("正在重试…")
                                : QStringLiteral("正在调用…"));
@@ -564,8 +652,10 @@ void McpClientWorkbench::cancelToolCall()  // 取消当前尚未完成的工具�
 void McpClientWorkbench::resetToolDetails()  // 清空与旧 Client 关联的工具详情
 {
     m_tools.clear();
+    m_visibleToolIndexes.clear();
     m_toolTable->setRowCount(0);
-    m_toolDescription->setText(QStringLiteral("请先加载并选择一个工具。"));
+    m_toolCount->setText(QStringLiteral("工具（0）"));
+    m_toolDescription->setPlainText(QStringLiteral("请先加载并选择一个工具。"));
     m_inputSchema->clear();
     m_outputSchema->clear();
     m_arguments->setPlainText(QStringLiteral("{}"));
@@ -586,8 +676,7 @@ void McpClientWorkbench::updateControls()  // 根据连接和操作状态更新�
                            && !m_listToolsOperation->isFinished();  // 是否正在加载工具
     const bool callBusy = m_toolCallOperation
                           && !m_toolCallOperation->isFinished();  // 是否正在调用工具
-    const bool hasTool = m_toolTable->currentRow() >= 0
-                         && m_toolTable->currentRow() < m_tools.size();  // 是否选择有效工具
+    const bool hasTool = selectedToolIndex() >= 0;  // 是否选择有效的过滤后工具
     m_connectionState->setText(
         ready ? m_connectionState->text().isEmpty()
                     ? QStringLiteral("Transport：Endpoint 可达 ｜ MCP：2026-07-28 可用")
@@ -597,7 +686,7 @@ void McpClientWorkbench::updateControls()  // 根据连接和操作状态更新�
                     : m_connectionState->text());
     m_discoverButton->setEnabled(ready && !discoveryBusy);
     m_loadToolsButton->setEnabled(ready && !toolsBusy);
-    m_clientSelector->setEnabled(!discoveryBusy && !toolsBusy && !callBusy);
+    m_toolSearch->setEnabled(!callBusy);
     m_callButton->setEnabled(ready && hasTool && !callBusy);
     m_cancelButton->setEnabled(callBusy);
     m_retryButton->setEnabled(

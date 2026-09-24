@@ -391,14 +391,15 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
             Internal::McpOperationAccess::fail(activation, entry->error);
         };
     const auto startOperation = entry->client->start();  // 启动底层 Transport
+    McpOperation<void>* startOperationPointer = startOperation.data();  // 避免完成回调强引用自身
     const auto continueDiscovery =  // Transport 成功后执行固定版本协议发现
-        [this, id, entry, activation, startOperation, failActivation] {
+        [this, id, entry, activation, startOperationPointer, failActivation] {
             if (activation->isFinished()) {
                 return;
             }
-            if (startOperation->status()
+            if (startOperationPointer->status()
                 != McpOperationBase::Status::Succeeded) {
-                failActivation(startOperation->error());
+                failActivation(startOperationPointer->error());
                 return;
             }
             entry->transportState = TransportState::Active;
@@ -408,19 +409,20 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
             emit clientProtocolStateChanged(id, entry->protocolState);
             emit clientStateChanged(id, entry->state);
             const auto discoverOperation = entry->client->discover();  // 验证现代协议发现响应
+            McpOperation<McpDiscoveryResult>* discoverOperationPointer = discoverOperation.data();  // 避免发现回调强引用自身
             const auto continueTools =  // 发现成功并匹配固定版本后加载工具
                 [this,
                  id,
                  entry,
                  activation,
-                 discoverOperation,
+                 discoverOperationPointer,
                  failActivation] {
                     if (activation->isFinished()) {
                         return;
                     }
-                    if (discoverOperation->status()
+                    if (discoverOperationPointer->status()
                         != McpOperationBase::Status::Succeeded) {
-                        McpError error = discoverOperation->error();  // 归一化协议发现失败
+                        McpError error = discoverOperationPointer->error();  // 归一化协议发现失败
                         if (error.code == McpErrorCode::RemoteError
                             && error.remoteCode == -32601) {
                             entry->transportState = TransportState::Reachable;
@@ -444,7 +446,7 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
                         return;
                     }
                     const McpDiscoveryResult& discovery =  // 读取 Server 声明的支持版本
-                        *discoverOperation->result();
+                        *discoverOperationPointer->result();
                     if (!discovery.supportedVersions.contains(
                             QStringLiteral(LIBMCP_PROTOCOL_VERSION))) {
                         entry->transportState = TransportState::Reachable;
@@ -499,21 +501,22 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
                     emit clientStateChanged(id, entry->state);
                     if (hasTools) {
                         const auto operation = entry->client->listTools();  // 并行加载全部工具页
+                        McpOperation<QList<McpTool>>* operationPointer = operation.data();  // 避免列表回调强引用自身
                         const auto finish =  // 保存工具快照或终止启用
                             [entry,
                              activation,
-                             operation,
+                             operationPointer,
                              failActivation,
                              completeOne] {
                             if (activation->isFinished()) {
                                 return;
                             }
-                            if (operation->status()
+                            if (operationPointer->status()
                                 != McpOperationBase::Status::Succeeded) {
-                                failActivation(operation->error());
+                                failActivation(operationPointer->error());
                                 return;
                             }
-                            entry->tools = *operation->result();
+                            entry->tools = *operationPointer->result();
                             completeOne();
                         };
                         QObject::connect(operation.data(),
@@ -526,21 +529,22 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
                     }
                     if (hasResources && !activation->isFinished()) {
                         const auto resourcesOperation = entry->client->listResources();  // 并行加载固定资源
+                        McpOperation<QList<McpResource>>* resourcesOperationPointer = resourcesOperation.data();  // 避免列表回调强引用自身
                         const auto finishResources =  // 保存资源快照或终止启用
                             [entry,
                              activation,
-                             resourcesOperation,
+                             resourcesOperationPointer,
                              failActivation,
                              completeOne] {
                             if (activation->isFinished()) {
                                 return;
                             }
-                            if (resourcesOperation->status()
+                            if (resourcesOperationPointer->status()
                                 != McpOperationBase::Status::Succeeded) {
-                                failActivation(resourcesOperation->error());
+                                failActivation(resourcesOperationPointer->error());
                                 return;
                             }
-                            entry->resources = *resourcesOperation->result();
+                            entry->resources = *resourcesOperationPointer->result();
                             completeOne();
                         };
                         QObject::connect(resourcesOperation.data(),
@@ -551,21 +555,22 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
                             finishResources();
                         }
                         const auto templatesOperation = entry->client->listResourceTemplates();  // 并行加载资源模板
+                        McpOperation<QList<McpResourceTemplate>>* templatesOperationPointer = templatesOperation.data();  // 避免列表回调强引用自身
                         const auto finishTemplates =  // 保存模板快照或终止启用
                             [entry,
                              activation,
-                             templatesOperation,
+                             templatesOperationPointer,
                              failActivation,
                              completeOne] {
                             if (activation->isFinished()) {
                                 return;
                             }
-                            if (templatesOperation->status()
+                            if (templatesOperationPointer->status()
                                 != McpOperationBase::Status::Succeeded) {
-                                failActivation(templatesOperation->error());
+                                failActivation(templatesOperationPointer->error());
                                 return;
                             }
-                            entry->resourceTemplates = *templatesOperation->result();
+                            entry->resourceTemplates = *templatesOperationPointer->result();
                             completeOne();
                         };
                         QObject::connect(templatesOperation.data(),
@@ -578,21 +583,22 @@ QSharedPointer<McpOperation<void>> McpClientManager::startClient(const QString &
                     }
                     if (hasPrompts && !activation->isFinished()) {
                         const auto operation = entry->client->listPrompts();  // 并行加载全部 Prompt 页
+                        McpOperation<QList<McpPrompt>>* operationPointer = operation.data();  // 避免列表回调强引用自身
                         const auto finish =  // 保存 Prompt 快照或终止启用
                             [entry,
                              activation,
-                             operation,
+                             operationPointer,
                              failActivation,
                              completeOne] {
                             if (activation->isFinished()) {
                                 return;
                             }
-                            if (operation->status()
+                            if (operationPointer->status()
                                 != McpOperationBase::Status::Succeeded) {
-                                failActivation(operation->error());
+                                failActivation(operationPointer->error());
                                 return;
                             }
-                            entry->prompts = *operation->result();
+                            entry->prompts = *operationPointer->result();
                             completeOne();
                         };
                         QObject::connect(operation.data(),

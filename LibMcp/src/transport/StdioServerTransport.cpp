@@ -9,6 +9,11 @@
 #include <cstdio>
 
 namespace LibMcp {
+namespace {
+
+constexpr qsizetype maximumStdioFrameBytes = 16 * 1024 * 1024;  // STDIO 单行协议帧的最大字节数
+
+} // namespace
 
 // 保存 STDIO Server 的标准流、事件通知器和逐行 framing 缓冲。
 class StdioServerTransportPrivate
@@ -24,6 +29,12 @@ public:
     void consumeInput()  // 读取 stdin 并解析全部完整 JSON 行
     {
         inputBuffer += input.readAll();
+        if (inputBuffer.size() > maximumStdioFrameBytes
+            && !inputBuffer.contains('\n')) {
+            inputBuffer.clear();
+            notifier.reset();
+            return;
+        }
         while (true) {
             const qsizetype lineEnd = inputBuffer.indexOf('\n');  // 当前完整消息的行结束位置
             if (lineEnd < 0) {
@@ -31,6 +42,10 @@ public:
             }
             const QByteArray line = inputBuffer.left(lineEnd).trimmed();  // 当前完整协议行
             inputBuffer.remove(0, lineEnd + 1);
+            if (line.size() > maximumStdioFrameBytes) {
+                notifier.reset();
+                return;
+            }
             if (line.isEmpty()) {
                 continue;
             }

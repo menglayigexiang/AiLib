@@ -11,6 +11,9 @@ int main(
     char** argv)   // 进程参数数组
 {                  // 提供 STDIO Transport 测试使用的最小协议 Server
     QCoreApplication application(argc, argv);  // 初始化 Qt Core 运行环境
+    if (application.arguments().contains(QStringLiteral("--exit-immediately"))) {
+        return 0;
+    }
     std::string inputLine;  // 保存阻塞读取的一条完整 JSON-RPC 请求
     while (std::getline(std::cin, inputLine)) {
         const QString line = QString::fromStdString(inputLine);  // 转换当前协议行

@@ -10,6 +10,8 @@
 class QLabel;
 // 编辑 Server Endpoint 的 Qt 单行输入类型。
 class QLineEdit;
+// 编辑或展示较长 JSON 文本的 Qt 多行编辑器类型。
+class QPlainTextEdit;
 // 触发 Server 操作的 Qt 按钮类型。
 class QPushButton;
 // 编辑 Server 监听端口的 Qt 数值输入类型。
@@ -44,6 +46,7 @@ private:
     void startServer();                              // 按当前 Endpoint 配置启动 Server
     void stopServer();                               // 停止当前 Server 并恢复 Endpoint 编辑
     void updateServerControls();                     // 同步 Server 状态文本和控件可用性
+    void refreshServerDescription();                 // 刷新 Server 身份、版本、能力和工具快照
 
     LibMcp::McpClientManager m_clientManager;        // 保存配置与运行中的 Client 实例
     std::unique_ptr<LibMcp::McpServer> m_server;     // 当前无状态 MCP Server
@@ -57,6 +60,10 @@ private:
     QLabel* m_serverStatus = nullptr;                // Server 最终运行状态
     QLabel* m_serverEndpoint = nullptr;              // Server 当前完整 Endpoint
     QLabel* m_protocolVersion = nullptr;             // 固定 MCP 协议版本
+    QLabel* m_serverInfo = nullptr;                   // Server 对外声明的名称、版本和标题
+    QLabel* m_serverSupportedVersions = nullptr;      // Server 支持的 MCP 协议版本集合
+    QPlainTextEdit* m_serverCapabilities = nullptr;   // Server 当前能力声明 JSON
+    QTableWidget* m_serverTools = nullptr;            // Server 已注册工具及 Schema 列表
     QLabel* m_activeRequests = nullptr;               // 当前活动请求数量
     QLabel* m_totalRequests = nullptr;                // 累计请求数量
     QLabel* m_successRequests = nullptr;              // 累计成功分发数量

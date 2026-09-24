@@ -8,6 +8,11 @@
 #include <QSet>
 
 namespace LibMcp::Internal {
+namespace {
+
+constexpr qsizetype maximumBufferedResponseBytes = 16 * 1024 * 1024;  // 非流式 HTTP 响应的最大保留字节数
+
+} // namespace
 
 // 保存 HttpClient 的 Qt Network 实现，职责限定为通用 HTTP 交换。
 class HttpClientPrivate
@@ -41,6 +46,8 @@ QFuture<McpResult<HttpResponse>> HttpClient::send(
     Promise<McpResult<HttpResponse>> promise;  // 保存异步 HTTP 结果写入端
     const QFuture<McpResult<HttpResponse>> future = promise.future();  // 返回给调用方的结果读取端
     QNetworkRequest networkRequest(request.url);  // 构造 Qt Network 请求对象
+    networkRequest.setTransferTimeout(
+        static_cast<int>(request.transferTimeout.count()));
     for (auto iterator = request.headers.constBegin();
          iterator != request.headers.constEnd();
          ++iterator) {
@@ -62,22 +69,37 @@ QFuture<McpResult<HttpResponse>> HttpClient::send(
         return response;
     };
     const auto body = std::make_shared<QByteArray>();  // 收集最终响应以兼容非流式调用方
+    const auto responseTooLarge = std::make_shared<bool>(false);  // 标记非流式响应已超过安全上限
     connect(reply,
             &QNetworkReply::readyRead,
             this,
-            [reply, dataHandler, responseHead, body] {  // 立即上送流式字节并保留完整正文
+            [reply, dataHandler, responseHead, body, responseTooLarge] {  // 立即上送流式字节并有界保留非流式正文
                 const QByteArray chunk = reply->readAll();  // 读取本次到达的增量字节
-                body->append(chunk);
-                if (dataHandler && !chunk.isEmpty()) {
-                    dataHandler(responseHead(), chunk);
+                const bool consumed = dataHandler && !chunk.isEmpty()
+                                          ? dataHandler(responseHead(), chunk)
+                                          : false;  // 流式调用方可避免重复累积已消费数据
+                if (!consumed) {
+                    if (body->size() + chunk.size() > maximumBufferedResponseBytes) {
+                        *responseTooLarge = true;
+                        reply->abort();
+                        return;
+                    }
+                    body->append(chunk);
                 }
             });
     connect(
         reply,
         &QNetworkReply::finished,
         this,
-        [this, reply, promise, responseHead, body] {  // 收集一次完整 HTTP 响应并结束 Future
+        [this, reply, promise, responseHead, body, dataHandler, responseTooLarge] {  // 收集一次完整 HTTP 响应并结束 Future
             d->activeReplies.remove(reply);
+            if (*responseTooLarge) {
+                reply->deleteLater();
+                promise.finish(McpResult<HttpResponse>::failure(
+                    {McpErrorCode::TransportError,
+                     QStringLiteral("HTTP 响应超过 16 MiB 安全上限")}));
+                return;
+            }
             const int statusCode =  // HTTP 错误响应仍保留其状态码与正文
                 reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
                     .toInt();
@@ -91,7 +113,19 @@ QFuture<McpResult<HttpResponse>> HttpClient::send(
             }
 
             const QByteArray tail = reply->readAll();  // 读取 finished 前尚未触发 readyRead 的尾部字节
-            body->append(tail);
+            const bool tailConsumed = dataHandler && !tail.isEmpty()
+                                          ? dataHandler(responseHead(), tail)
+                                          : false;  // 确保流式响应的尾部字节也被处理
+            if (!tailConsumed) {
+                if (body->size() + tail.size() > maximumBufferedResponseBytes) {
+                    reply->deleteLater();
+                    promise.finish(McpResult<HttpResponse>::failure(
+                        {McpErrorCode::TransportError,
+                         QStringLiteral("HTTP 响应超过 16 MiB 安全上限")}));
+                    return;
+                }
+                body->append(tail);
+            }
             HttpResponse response = responseHead();  // 保存与业务协议无关的完整 HTTP 响应
             response.body = *body;
             reply->deleteLater();

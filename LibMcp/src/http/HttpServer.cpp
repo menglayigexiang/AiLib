@@ -4,12 +4,15 @@
 #include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTimer>
 #include <QUuid>
 
 namespace LibMcp::Internal {
 namespace {
 
 constexpr qsizetype maximumRequestBytes = 16 * 1024 * 1024;  // 单个 HTTP 请求的安全上限
+constexpr int requestReadTimeoutMs = 30000;                   // 接收完整 HTTP 请求的最长毫秒数
+constexpr int responseTimeoutMs = 30000;                      // 业务层开始响应的最长毫秒数
 
 QByteArray normalizedHeaderName(const QByteArray& name)  // 统一 Header 名以便大小写不敏感查询
 {
@@ -26,6 +29,8 @@ public:
     QTcpServer server;                                // 接受 TCP 连接的底层监听器
     QHash<QTcpSocket*, QByteArray> buffers;           // 保存各连接尚未解析的字节
     QHash<HttpRequestId, QTcpSocket*> pending;        // 保存等待响应的请求
+    QHash<QTcpSocket*, QTimer*> readTimers;           // 限制慢速请求占用连接的计时器
+    QHash<HttpRequestId, QTimer*> responseTimers;     // 限制业务层迟迟不响应的计时器
     QSet<HttpRequestId> streaming;                    // 保存已发送 chunked 响应头的请求
     HttpRequestHandler requestHandler;                // 接收完整 HTTP 请求的上层回调
     HttpRequestClosedHandler closedHandler;           // 接收提前关闭事件的上层回调
@@ -34,6 +39,14 @@ public:
     {
         while (QTcpSocket* socket = server.nextPendingConnection()) {
             buffers.insert(socket, {});
+            QTimer* readTimer = new QTimer(socket);  // 与 Socket 共享生命周期的读取 deadline
+            readTimer->setSingleShot(true);
+            readTimers.insert(socket, readTimer);
+            QObject::connect(readTimer,
+                             &QTimer::timeout,
+                             owner,
+                             [this, socket] { reject(socket, 408, "Request Timeout"); });
+            readTimer->start(requestReadTimeoutMs);
             QObject::connect(socket,
                              &QTcpSocket::readyRead,
                              owner,
@@ -48,12 +61,14 @@ public:
     void removeSocket(QTcpSocket* socket)  // 清理断开连接及其未完成请求
     {
         buffers.remove(socket);
+        readTimers.remove(socket);
         for (auto iterator = pending.begin(); iterator != pending.end();) {
             if (iterator.value() != socket) {
                 ++iterator;
                 continue;
             }
             const HttpRequestId requestId = iterator.key();  // 保存即将移除的请求标识
+            clearResponseTimer(requestId);
             streaming.remove(requestId);
             iterator = pending.erase(iterator);
             if (closedHandler) {
@@ -72,8 +87,36 @@ public:
         socket->disconnectFromHost();
     }
 
+    void clearResponseTimer(const HttpRequestId& requestId)  // 停止并释放指定请求的响应 deadline
+    {
+        QTimer* timer = responseTimers.take(requestId);  // 取出不再需要的 deadline 计时器
+        if (timer) {
+            timer->stop();
+            timer->deleteLater();
+        }
+    }
+
+    McpResult<void> writeBytes(
+        QTcpSocket* socket,     // 需要写入的活动连接
+        const QByteArray& bytes)  // 需要排入 Socket 发送缓冲区的完整字节
+    {                            // 校验 Socket 状态并传播同步写入失败
+        if (!socket || socket->state() != QAbstractSocket::ConnectedState) {
+            return McpResult<void>::failure(
+                {McpErrorCode::ConnectionClosed,
+                 QStringLiteral("HTTP 对端已断开")});
+        }
+        const qint64 written = socket->write(bytes);  // 记录实际排入发送缓冲区的字节数
+        if (written != bytes.size()) {
+            return McpResult<void>::failure(
+                {McpErrorCode::TransportError,
+                 socket->errorString()});
+        }
+        return McpResult<void>::success();
+    }
+
     void readRequest(QTcpSocket* socket)  // 增量读取并组装一个完整 HTTP 请求
     {
+        QTimer* readTimer = readTimers.value(socket);  // 读取当前连接的绝对请求 deadline
         QByteArray& buffer = buffers[socket];  // 保存当前连接累计收到的请求字节
         buffer += socket->readAll();
         if (buffer.size() > maximumRequestBytes) {
@@ -120,9 +163,25 @@ public:
             return;
         }
         request.body = buffer.mid(bodyOffset, contentLength);
+        buffer.remove(0, bodyOffset + contentLength);  // 消费已解析请求，避免后续数据触发重复分发
+        if (readTimer) {
+            readTimer->stop();
+        }
         const HttpRequestId requestId =  // 为当前请求生成仅在 HTTP 层使用的路由标识
             QUuid::createUuid().toString(QUuid::WithoutBraces);
         pending.insert(requestId, socket);
+        QTimer* responseTimer = new QTimer(socket);  // 限制业务层占用已解析请求的时间
+        responseTimer->setSingleShot(true);
+        responseTimers.insert(requestId, responseTimer);
+        QObject::connect(
+            responseTimer,
+            &QTimer::timeout,
+            owner,
+            [this, requestId, socket] {  // 超时时交给 Socket 断开流程统一清理请求
+                responseTimers.remove(requestId);
+                reject(socket, 504, "Gateway Timeout");
+            });
+        responseTimer->start(responseTimeoutMs);
         if (requestHandler) {
             requestHandler(requestId, request);
         } else {
@@ -179,6 +238,12 @@ void HttpServer::close()  // 停止监听并关闭全部连接
         socket->abort();
     }
     d->buffers.clear();
+    d->readTimers.clear();
+    for (QTimer* timer : std::as_const(d->responseTimers)) {
+        timer->stop();
+        timer->deleteLater();
+    }
+    d->responseTimers.clear();
     d->pending.clear();
     d->streaming.clear();
 }
@@ -202,7 +267,11 @@ McpResult<void> HttpServer::startStream(
         bytes += iterator.key() + ": " + iterator.value() + "\r\n";
     }
     bytes += "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
-    socket->write(bytes);
+    const McpResult<void> writeResult = d->writeBytes(socket, bytes);  // 确认流式响应头已排入发送缓冲区
+    if (writeResult.isError()) {
+        return writeResult;
+    }
+    d->clearResponseTimer(requestId);
     d->streaming.insert(requestId);
     return McpResult<void>::success();
 }
@@ -217,8 +286,9 @@ McpResult<void> HttpServer::writeStream(
             {McpErrorCode::ConnectionClosed,
              QStringLiteral("HTTP 流已关闭或尚未开始")});
     }
-    socket->write(QByteArray::number(chunk.size(), 16) + "\r\n" + chunk + "\r\n");
-    return McpResult<void>::success();
+    const QByteArray bytes =  // 编码完整 HTTP chunk，包含长度和结束换行
+        QByteArray::number(chunk.size(), 16) + "\r\n" + chunk + "\r\n";
+    return d->writeBytes(socket, bytes);
 }
 
 McpResult<void> HttpServer::finishStream(
@@ -231,9 +301,11 @@ McpResult<void> HttpServer::finishStream(
             {McpErrorCode::ConnectionClosed,
              QStringLiteral("HTTP 流已关闭或不存在")});
     }
-    socket->write("0\r\n\r\n");
+    d->clearResponseTimer(requestId);
+    const McpResult<void> writeResult =  // 确认结束 chunk 已排入发送缓冲区
+        d->writeBytes(socket, QByteArrayLiteral("0\r\n\r\n"));
     socket->disconnectFromHost();
-    return McpResult<void>::success();
+    return writeResult;
 }
 
 McpResult<void> HttpServer::sendResponse(
@@ -246,6 +318,7 @@ McpResult<void> HttpServer::sendResponse(
             {McpErrorCode::ConnectionClosed,
              QStringLiteral("HTTP 请求已关闭或不存在")});
     }
+    d->clearResponseTimer(requestId);
 
     QByteArray bytes =  // 构造 HTTP 状态行
         "HTTP/1.1 " + QByteArray::number(response.statusCode) + " "
@@ -257,9 +330,9 @@ McpResult<void> HttpServer::sendResponse(
     }
     bytes += "Content-Length: " + QByteArray::number(response.body.size())
              + "\r\nConnection: close\r\n\r\n" + response.body;
-    socket->write(bytes);
+    const McpResult<void> writeResult = d->writeBytes(socket, bytes);  // 确认完整响应已排入发送缓冲区
     socket->disconnectFromHost();
-    return McpResult<void>::success();
+    return writeResult;
 }
 
 bool HttpServer::isListening() const  // 查询当前是否正在监听

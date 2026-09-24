@@ -4,6 +4,8 @@
 #include <QHash>
 #include <QUrl>
 
+#include <chrono>
+
 namespace LibMcp::Internal {
 
 using HttpHeaders = QHash<QByteArray, QByteArray>;  // 保存不解释业务语义的 HTTP Headers
@@ -16,6 +18,7 @@ struct HttpRequest
     QByteArray target;   // Server 收到的原始请求目标
     HttpHeaders headers; // 请求 Headers
     QByteArray body;     // 完整请求正文
+    std::chrono::milliseconds transferTimeout{30000};  // 无数据传输超时，零表示长寿命流不限时
 };
 
 // 描述一次完整 HTTP 响应，不包含 MCP 协议语义。

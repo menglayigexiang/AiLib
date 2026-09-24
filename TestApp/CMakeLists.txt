@@ -25,6 +25,8 @@ if(AILIB_BUILD_MCP)
         LibMcp/McpClientConfigDialog.h
         LibMcp/McpClientWorkbench.cpp
         LibMcp/McpClientWorkbench.h
+        LibMcp/TestServerTools.cpp
+        LibMcp/TestServerTools.h
     )
 endif()
 

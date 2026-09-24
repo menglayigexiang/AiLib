@@ -13,7 +13,21 @@ MCP `2026-07-28`。它不包含旧版初始化握手、协议级 Session 或版�
 - `QSharedPointer<McpOperation<T>>` 异步结果、进度、输入请求和取消。
 - 内存 Transport、真实 STDIO 子进程测试和本地 HTTP 协议测试。
 - TestApp Client 配置列表、连接开关、能力发现、工具浏览、JSON 参数调用、
-  Progress/MRTR 输入与结果诊断，以及 Server 运行观测。
+  Progress/MRTR 输入与结果诊断，以及 Server 身份、支持版本、Capabilities、
+  已注册工具和请求运行观测。
+
+TestApp 将 Client 配置与调试工作台融合在同一个 Client 页面：上方管理配置和查看状态，
+下方直接发现能力、浏览工具并发起调用。配置列表固定显示三行，更多 Client 在列表内滚动；
+整个页面支持纵向滚动，较小窗口也不会压缩 Schema、参数和调用结果的阅读空间。配置列表
+当前行同时是工作台的调试目标，不再提供重复的 Client 下拉选择器。
+
+工具区域使用可搜索的单列名称列表，完整说明只在右侧详情中展示，避免重复内容撑高列表。
+Input Schema 与 Output Schema 使用完整宽度标签页切换，JSON 保持格式化且不自动换行，
+并可一键复制当前 Schema；鼠标和键盘切换工具都会同步刷新详情。
+
+TestApp Server 默认注册五个典型测试工具：对象回显、无参数当前时间、必填数值求和、
+带枚举和结构化输出的模拟天气，以及返回 `isError=true` 的业务错误。工具定义集中在
+`TestServerTools` 模块，便于同时验证工具发现、JSON Schema、注解和调用结果展示。
 
 Client 列表中的开关表示“用户希望启用”，而不是“TCP/HTTP 已连接”。启用流程依次为
 `Starting → Discovering → LoadingCapabilities → Ready`；只有固定版本发现和 Server 声明的
@@ -26,6 +40,10 @@ Manager 另外公开独立的 `TransportState` 和 `ProtocolState`。Transport �
 Endpoint 的响应后才标记为 `Reachable`；协议状态独立区分未验证、验证中、兼容、不兼容和
 响应无效。因此 TestApp 可以准确显示“Endpoint 可达，但不兼容 MCP 2026-07-28”，而不是用
 单一“已连接/未连接”掩盖真实原因。
+
+`McpServer` 提供只读的 `serverInfo()`、`supportedProtocolVersions()`、
+`capabilities()` 和 `tools()` 查询。TestApp Server 页使用这些公共接口展示实际注册表状态，
+不会穿透 Server 私有实现或在界面复制一份能力判断逻辑。
 
 官方 Schema 固定保存在 `LibMcp/protocol/mcp-2026-07-28.schema.json`。普通构建
 不下载协议文件，也不运行代码生成器。jsoncons 作为 LibMcp 私有的 header-only
