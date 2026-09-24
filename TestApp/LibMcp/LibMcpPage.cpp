@@ -1,6 +1,7 @@
 #include "LibMcpPage.h"
 
 #include "McpClientConfigDialog.h"
+#include "McpClientWorkbench.h"
 
 #include <LibMcp/StreamableHttpTransport.h>
 
@@ -39,6 +40,8 @@ LibMcpPage::LibMcpPage(QWidget* parent)  // 创建 Client 与 Server 测试页
     auto* tabs = new QTabWidget(this);  // 承载 Client 配置和 Server 观测页面
     tabs->setObjectName(QStringLiteral("mcpTabs"));
     tabs->addTab(createClientPage(), QStringLiteral("Client"));
+    m_clientWorkbench = new McpClientWorkbench(&m_clientManager, tabs);
+    tabs->addTab(m_clientWorkbench, QStringLiteral("Client 调试"));
     tabs->addTab(createServerPage(), QStringLiteral("Server"));
     layout->addWidget(tabs);
     connect(&m_clientManager,
@@ -46,10 +49,33 @@ LibMcpPage::LibMcpPage(QWidget* parent)  // 创建 Client 与 Server 测试页
             this,
             [this] {  // 配置变更后同步表格和持久化文件
                 refreshClientTable();
+                m_clientWorkbench->refreshClients();
                 saveConfigurations();
+            });
+    connect(&m_clientManager,
+            &McpClientManager::clientStateChanged,
+            this,
+            [this](const QString&, McpClientManager::ClientState) {  // 立即展示完整启用流程阶段
+                refreshClientTable();
+                m_clientWorkbench->refreshClients();
+            });
+    connect(&m_clientManager,
+            &McpClientManager::clientTransportStateChanged,
+            this,
+            [this](const QString&, McpClientManager::TransportState) {  // 同步独立 Transport 状态列
+                refreshClientTable();
+                m_clientWorkbench->refreshClients();
+            });
+    connect(&m_clientManager,
+            &McpClientManager::clientProtocolStateChanged,
+            this,
+            [this](const QString&, McpClientManager::ProtocolState) {  // 同步独立协议状态列
+                refreshClientTable();
+                m_clientWorkbench->refreshClients();
             });
     loadConfigurations();
     refreshClientTable();
+    m_clientWorkbench->refreshClients();
     updateServerControls();
 }
 
@@ -66,19 +92,23 @@ QWidget* LibMcpPage::createClientPage()  // 创建 Client 列表与添加入口
     toolbar->addWidget(addButton);
     layout->addLayout(toolbar);
 
-    m_clientTable = new QTableWidget(0, 5, page);
+    m_clientTable = new QTableWidget(0, 7, page);
     m_clientTable->setObjectName(QStringLiteral("mcpClientTable"));
     m_clientTable->setHorizontalHeaderLabels(
         {QStringLiteral("名称"),
          QStringLiteral("类型"),
          QStringLiteral("参数"),
-         QStringLiteral("状态"),
+         QStringLiteral("启用"),
+         QStringLiteral("Transport"),
+         QStringLiteral("MCP 协议"),
          QStringLiteral("操作")});
     m_clientTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_clientTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_clientTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     m_clientTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     m_clientTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    m_clientTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
     m_clientTable->verticalHeader()->setVisible(false);
     m_clientTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_clientTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -205,33 +235,32 @@ void LibMcpPage::removeClient(const QString& id)  // 确认并删除指定未连
     }
 }
 
-void LibMcpPage::setClientConnected(
-    const QString& id,  // 需要切换连接状态的 Client ID
-    bool connected)    // true 连接，false 断开
-{                      // 发起连接状态切换并在结束后刷新表格
-    const QSharedPointer<McpOperation<void>> operation = connected
+void LibMcpPage::setClientEnabled(
+    const QString& id,  // 需要切换启用状态的 Client ID
+    bool enabled)      // true 启用并验证，false 禁用
+{                      // 发起完整启用或禁用流程并在结束后刷新表格
+    const QSharedPointer<McpOperation<void>> operation = enabled
         ? m_clientManager.startClient(id)
-        : m_clientManager.stopClient(id);  // 保存本次连接或断开操作
+        : m_clientManager.stopClient(id);  // 保存本次启用或禁用操作
     m_operations.insert(operation.data(), operation);
-    const auto finishOperation = [this, id, connected, operation] {  // 统一收敛同步与异步完成的连接操作
+    const auto finishOperation = [this, id, enabled, operation] {  // 统一收敛同步与异步完成的状态操作
         QObject::disconnect(operation.data(), nullptr, this, nullptr);
         m_operations.remove(operation.data());
         if (operation->status() != McpOperationBase::Status::Succeeded) {
-            m_clientErrors.insert(id, operation->error().message);
             qCWarning(lcLibMcpPage).noquote()
                 << QStringLiteral("%1失败：%2")
-                       .arg(connected ? QStringLiteral("连接")
-                                      : QStringLiteral("断开"),
+                       .arg(enabled ? QStringLiteral("启用")
+                                    : QStringLiteral("禁用"),
                             operation->error().message);
         } else {
-            m_clientErrors.remove(id);
             qCInfo(lcLibMcpPage).noquote()
                 << QStringLiteral("Client %1 已%2")
                        .arg(id,
-                            connected ? QStringLiteral("连接")
-                                      : QStringLiteral("断开"));
+                            enabled ? QStringLiteral("可用")
+                                    : QStringLiteral("禁用"));
         }
         refreshClientTable();
+        m_clientWorkbench->refreshClients();
     };
     connect(operation.data(),
             &McpOperationBase::finished,
@@ -248,8 +277,13 @@ void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
     m_clientTable->setRowCount(configs.size());
     for (int row = 0; row < configs.size(); ++row) {
         const McpClientConfig& config = configs.at(row);  // 当前需要显示的 Client 配置
-        McpClient* client = m_clientManager.client(config.id);  // 当前可选运行实例
-        const bool connected = client && client->isRunning();  // 当前最终连接状态
+        const McpClientManager::ClientState state =  // 当前完整启用流程阶段
+            m_clientManager.clientState(config.id);
+        const McpClientManager::TransportState transportState =  // 当前独立 Transport 状态
+            m_clientManager.clientTransportState(config.id);
+        const McpClientManager::ProtocolState protocolState =  // 当前固定协议验证状态
+            m_clientManager.clientProtocolState(config.id);
+        const bool enabled = m_clientManager.clientEnabled(config.id);  // 用户是否希望启用该配置
         m_clientTable->setItem(row, 0, new QTableWidgetItem(config.name));
         m_clientTable->setItem(
             row,
@@ -262,34 +296,86 @@ void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
         summaryItem->setToolTip(summaryItem->text());
         m_clientTable->setItem(row, 2, summaryItem);
 
-        const QString stateText = connected  // 合并最终连接状态与可操作的错误摘要
-                                      ? QStringLiteral("已连接")
-                                      : m_clientErrors.value(
-                                            config.id,
-                                            QStringLiteral("未连接"));
-        auto* switchBox = new QCheckBox(stateText,
-                                        m_clientTable);  // 切换 Client 最终连接状态
-        switchBox->setToolTip(m_clientErrors.value(config.id));
+        auto* switchBox = new QCheckBox(QStringLiteral("启用"),
+                                        m_clientTable);  // 只表达用户对 Client 的启用意图
         switchBox->setObjectName(QStringLiteral("mcpClientConnectionSwitch_%1").arg(config.id));
-        switchBox->setChecked(connected);
+        switchBox->setChecked(enabled);
         switchBox->setEnabled(m_operations.isEmpty());
         connect(switchBox,
                 &QCheckBox::toggled,
                 this,
-                [this, id = config.id, connected](bool checked) {  // 忽略表格初始化并处理用户切换
-                    if (checked != connected) {
-                        setClientConnected(id, checked);
+                [this, id = config.id, enabled](bool checked) {  // 忽略表格初始化并处理用户切换
+                    if (checked != enabled) {
+                        setClientEnabled(id, checked);
                     }
                 });
         m_clientTable->setCellWidget(row, 3, switchBox);
+
+        QString transportText;  // 映射底层 Transport 状态为不夸大连通性的文案
+        switch (transportState) {
+        case McpClientManager::TransportState::Stopped:
+            transportText = QStringLiteral("未启动");
+            break;
+        case McpClientManager::TransportState::Starting:
+            transportText = QStringLiteral("正在启动…");
+            break;
+        case McpClientManager::TransportState::Active:
+            transportText = QStringLiteral("已启动，等待响应");
+            break;
+        case McpClientManager::TransportState::Reachable:
+            transportText = QStringLiteral("Endpoint 可达");
+            break;
+        case McpClientManager::TransportState::Error:
+            transportText = QStringLiteral("通信失败");
+            break;
+        }
+        auto* transportItem = new QTableWidgetItem(transportText);  // 独立显示 Transport 是否真正可达
+        if (transportState == McpClientManager::TransportState::Error) {
+            transportItem->setToolTip(m_clientManager.clientError(config.id).message);
+        }
+        m_clientTable->setItem(row, 4, transportItem);
+
+        QString protocolText;  // 映射固定 MCP 版本的独立验证结果
+        switch (protocolState) {
+        case McpClientManager::ProtocolState::NotChecked:
+            protocolText = QStringLiteral("未验证");
+            break;
+        case McpClientManager::ProtocolState::Checking:
+            protocolText = QStringLiteral("正在验证 2026-07-28…");
+            break;
+        case McpClientManager::ProtocolState::Compatible:
+            if (state == McpClientManager::ClientState::Ready) {
+                protocolText = QStringLiteral("可用 · 工具%1 / 资源%2 / 模板%3 / Prompt%4")
+                                   .arg(m_clientManager.clientTools(config.id).size())
+                                   .arg(m_clientManager.clientResources(config.id).size())
+                                   .arg(m_clientManager.clientResourceTemplates(config.id).size())
+                                   .arg(m_clientManager.clientPrompts(config.id).size());
+            } else if (state == McpClientManager::ClientState::LoadingCapabilities) {
+                protocolText = QStringLiteral("兼容 · 正在加载能力…");
+            } else {
+                protocolText = QStringLiteral("版本兼容 · 能力不可用");
+            }
+            break;
+        case McpClientManager::ProtocolState::Incompatible:
+            protocolText = QStringLiteral("不兼容 2026-07-28");
+            break;
+        case McpClientManager::ProtocolState::Invalid:
+            protocolText = QStringLiteral("响应不是有效 MCP 2026-07-28");
+            break;
+        }
+        auto* protocolItem = new QTableWidgetItem(protocolText);  // 显示协议兼容性与最终可用性
+        if (state == McpClientManager::ClientState::Error) {
+            protocolItem->setToolTip(m_clientManager.clientError(config.id).message);
+        }
+        m_clientTable->setItem(row, 5, protocolItem);
 
         auto* actions = new QWidget(m_clientTable);  // 承载当前行编辑和删除按钮
         auto* actionLayout = new QHBoxLayout(actions);  // 紧凑排列次要行内操作
         actionLayout->setContentsMargins(0, 0, 0, 0);
         auto* editButton = new QPushButton(QStringLiteral("编辑"), actions);  // 编辑未连接配置
         auto* deleteButton = new QPushButton(QStringLiteral("删除"), actions);  // 删除未连接配置
-        editButton->setEnabled(!connected);
-        deleteButton->setEnabled(!connected);
+        editButton->setEnabled(!enabled);
+        deleteButton->setEnabled(!enabled);
         connect(editButton,
                 &QPushButton::clicked,
                 this,
@@ -300,7 +386,7 @@ void LibMcpPage::refreshClientTable()  // 按 Manager 当前配置重建表格
                 [this, id = config.id] { removeClient(id); });
         actionLayout->addWidget(editButton);
         actionLayout->addWidget(deleteButton);
-        m_clientTable->setCellWidget(row, 4, actions);
+        m_clientTable->setCellWidget(row, 6, actions);
     }
 }
 

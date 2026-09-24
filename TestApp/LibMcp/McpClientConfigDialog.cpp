@@ -190,12 +190,17 @@ void McpClientConfigDialog::validateAndAccept()  // 校验必填字段和 JSON �
         m_command->setFocus();
         return;
     }
-    const QUrl endpoint(m_url->text().trimmed());  // 解析并校验 Streamable HTTP 绝对端点
+    const QString endpointText = m_url->text().trimmed();  // 保留用户原始 URL 以识别 Markdown 粘贴错误
+    const QUrl endpoint(endpointText, QUrl::StrictMode);  // 严格解析 Streamable HTTP 绝对端点
     if (m_type->currentData().toString() == QStringLiteral("streamable-http")
         && (!endpoint.isValid() || endpoint.host().isEmpty()
+            || endpointText.contains(QStringLiteral("]("))
             || (endpoint.scheme() != QStringLiteral("http")
                 && endpoint.scheme() != QStringLiteral("https")))) {
-        QMessageBox::warning(this, QStringLiteral("配置无效"), QStringLiteral("请输入有效 URL。"));
+        QMessageBox::warning(
+            this,
+            QStringLiteral("配置无效"),
+            QStringLiteral("请输入纯文本 HTTP URL，不要粘贴 Markdown 链接。"));
         m_url->setFocus();
         return;
     }

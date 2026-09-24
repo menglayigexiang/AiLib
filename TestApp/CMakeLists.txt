@@ -23,6 +23,8 @@ if(AILIB_BUILD_MCP)
         LibMcp/LibMcpPage.h
         LibMcp/McpClientConfigDialog.cpp
         LibMcp/McpClientConfigDialog.h
+        LibMcp/McpClientWorkbench.cpp
+        LibMcp/McpClientWorkbench.h
     )
 endif()
 

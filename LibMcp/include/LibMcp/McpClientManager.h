@@ -11,6 +11,40 @@ class LIBMCP_EXPORT McpClientManager final : public QObject
 {
     Q_OBJECT
 public:
+    // 表示持久化 Client 从未启用到协议能力可用的运行阶段。
+    enum class ClientState
+    {
+        Disabled,    // 用户未启用 Client
+        Starting,    // 正在启动底层 Transport
+        Discovering, // 正在验证 MCP 2026-07-28
+        LoadingCapabilities, // 正在加载并校验 Server 声明的基础能力
+        Ready,       // 协议与声明能力已经验证，可以对外使用
+        Error        // 启用流程失败，错误详情由 clientError 返回
+    };
+    Q_ENUM(ClientState)
+
+    // 表示底层 Transport 从未启动到已收到远端响应的可观测状态。
+    enum class TransportState
+    {
+        Stopped,   // Transport 未启动或已经停止
+        Starting,  // 正在启动本地进程或准备 HTTP Transport
+        Active,    // Transport 已启动，但尚未证明远端 Endpoint 可达
+        Reachable, // 已收到可归因于当前 Endpoint 的响应
+        Error      // Transport 启动或通信失败
+    };
+    Q_ENUM(TransportState)
+
+    // 表示固定 MCP 2026-07-28 协议的独立验证结果。
+    enum class ProtocolState
+    {
+        NotChecked,   // 尚未取得足以判断协议的响应
+        Checking,     // 正在执行 server/discover
+        Compatible,   // Server 明确支持 MCP 2026-07-28
+        Incompatible, // Server 明确不支持固定协议版本
+        Invalid       // Endpoint 有响应，但响应不是有效的当前 MCP 协议
+    };
+    Q_ENUM(ProtocolState)
+
     explicit McpClientManager(QObject *parent = nullptr);  // 创建 Client 配置与运行实例管理器
     ~McpClientManager() override;                          // 停止并释放所有 Client 实例
 
@@ -31,14 +65,37 @@ public:
     QList<McpClientConfig> configs() const;                // 返回当前配置快照
     /// 返回 Manager 拥有的运行实例；尚未创建时返回 nullptr。
     McpClient *client(const QString &id) const;             // 查找 Manager 拥有的 Client 实例
-    /// 按配置创建并启动指定 Client。
-    QSharedPointer<McpOperation<void>> startClient(const QString &id);  // 按配置创建并启动 Client
-    /// 停止指定 Client；实例尚未创建时返回错误结果。
-    QSharedPointer<McpOperation<void>> stopClient(const QString &id);   // 停止指定 Client 实例
+    ClientState clientState(const QString& id) const;       // 返回 Client 当前启用与验证阶段
+    TransportState clientTransportState(const QString& id) const;  // 返回独立 Transport 可达状态
+    ProtocolState clientProtocolState(const QString& id) const;    // 返回固定 MCP 协议验证状态
+    bool clientEnabled(const QString& id) const;            // 返回用户是否希望启用该 Client
+    McpError clientError(const QString& id) const;          // 返回最近一次启用失败的详细错误
+    McpDiscoveryResult clientDiscovery(const QString& id) const;  // 返回最近成功的能力发现快照
+    QList<McpTool> clientTools(const QString& id) const;     // 返回 Ready Client 已校验的工具快照
+    QList<McpResource> clientResources(const QString& id) const;  // 返回 Ready Client 的固定资源快照
+    QList<McpResourceTemplate> clientResourceTemplates(const QString& id) const;  // 返回 Ready Client 的资源模板快照
+    QList<McpPrompt> clientPrompts(const QString& id) const;  // 返回 Ready Client 的 Prompt 快照
+    /// 启动 Transport，验证固定协议版本并加载工具；全部成功后才进入 Ready。
+    QSharedPointer<McpOperation<void>> startClient(const QString &id);  // 完成完整 Client 启用流程
+    /// 停止指定 Client，并清除协议能力和工具缓存。
+    QSharedPointer<McpOperation<void>> stopClient(const QString &id);   // 禁用并停止指定 Client
 
 signals:
     /// 配置集合成功改变后发出。
     void configsChanged();                                      // 通知持久化配置已改变
+    void clientStateChanged(
+        const QString& id,             // 状态发生变化的 Client ID
+        ClientState state);            // Client 最新运行阶段
+    void clientTransportStateChanged(
+        const QString& id,              // Transport 状态发生变化的 Client ID
+        TransportState state);          // Client 最新 Transport 状态
+    void clientProtocolStateChanged(
+        const QString& id,              // 协议状态发生变化的 Client ID
+        ProtocolState state);           // Client 最新协议验证状态
+    void clientToolsChanged(
+        const QString& id);            // 通知指定 Client 的工具快照已改变
+    void clientCapabilitiesChanged(
+        const QString& id);            // 通知发现结果或基础能力快照已改变
 
 private:
     // 隐藏配置集合和运行实例的内部存储。

@@ -99,6 +99,8 @@ if(AILIB_BUILD_MCP)
         ../TestApp/LibMcp/LibMcpPage.h
         ../TestApp/LibMcp/McpClientConfigDialog.cpp
         ../TestApp/LibMcp/McpClientConfigDialog.h
+        ../TestApp/LibMcp/McpClientWorkbench.cpp
+        ../TestApp/LibMcp/McpClientWorkbench.h
     )
 endif()
 

@@ -8,12 +8,92 @@
 #include <QEventLoop>
 #include <QFutureWatcher>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTest>
 #include <QTimer>
 
+#include <memory>
+
 using namespace LibMcp;
+
+// 模拟 HTTP 可达但不支持现代 server/discover 的旧协议 Server。
+class LegacyProtocolHttpServer final : public QObject
+{
+    Q_OBJECT
+public:
+    explicit LegacyProtocolHttpServer(QObject* parent = nullptr)  // 创建固定返回方法不存在错误的本地 Server
+        : QObject(parent)
+    {
+        connect(&m_server,
+                &QTcpServer::newConnection,
+                this,
+                [this] {  // 为每个诊断请求返回匹配 ID 的 JSON-RPC 错误
+                    QTcpSocket* socket = m_server.nextPendingConnection();  // 当前需要处理的本地连接
+                    auto buffer = std::make_shared<QByteArray>();  // 累积可能分段到达的 HTTP 请求
+                    connect(socket,
+                            &QTcpSocket::readyRead,
+                            socket,
+                            [socket, buffer] {  // 收齐 HTTP Body 后发送旧协议特征响应
+                                buffer->append(socket->readAll());
+                                const qsizetype headerEnd = buffer->indexOf("\r\n\r\n");  // 定位 HTTP Body 起点
+                                if (headerEnd < 0) {
+                                    return;
+                                }
+                                const QByteArray headers = buffer->left(headerEnd);  // 读取 Content-Length 所在的 Header
+                                const QRegularExpression lengthExpression(
+                                    QStringLiteral("Content-Length:\\s*(\\d+)"),
+                                    QRegularExpression::CaseInsensitiveOption);  // 匹配请求体字节数
+                                const QRegularExpressionMatch lengthMatch =
+                                    lengthExpression.match(QString::fromLatin1(headers));  // 解析请求体长度
+                                const int contentLength = lengthMatch.hasMatch()
+                                                              ? lengthMatch.captured(1).toInt()
+                                                              : 0;  // 请求体预期字节数
+                                const qsizetype bodyStart = headerEnd + 4;  // HTTP Body 起始偏移
+                                if (buffer->size() - bodyStart < contentLength) {
+                                    return;
+                                }
+                                const QJsonDocument requestDocument = QJsonDocument::fromJson(
+                                    buffer->mid(bodyStart, contentLength));  // 解析 JSON-RPC 请求以回显 ID
+                                const QJsonValue requestId =
+                                    requestDocument.object().value(QStringLiteral("id"));  // 当前请求 ID
+                                const QJsonObject responseObject{  // 模拟旧 Server 不认识现代发现方法
+                                    {QStringLiteral("jsonrpc"), QStringLiteral("2.0")},
+                                    {QStringLiteral("id"), requestId},
+                                    {QStringLiteral("error"),
+                                     QJsonObject{{QStringLiteral("code"), -32601},
+                                                 {QStringLiteral("message"),
+                                                  QStringLiteral("Method not found: server/discover")}}}};
+                                const QByteArray body = QJsonDocument(responseObject).toJson(
+                                    QJsonDocument::Compact);  // 编码完整 JSON-RPC 错误体
+                                const QByteArray response =  // 构造关闭连接的标准 HTTP JSON 响应
+                                    QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ")
+                                    + QByteArray::number(body.size())
+                                    + QByteArrayLiteral("\r\nConnection: close\r\n\r\n")
+                                    + body;
+                                socket->write(response);
+                                socket->disconnectFromHost();
+                            });
+                });
+    }
+
+    bool start()  // 在回环地址的系统分配端口启动监听
+    {
+        return m_server.listen(QHostAddress::LocalHost, 0);
+    }
+
+    quint16 port() const  // 返回系统实际分配的监听端口
+    {
+        return m_server.serverPort();
+    }
+
+private:
+    QTcpServer m_server;  // 承载旧协议诊断响应的本地 HTTP 监听器
+};
 
 template<typename T>
 bool waitForFuture(
@@ -85,12 +165,55 @@ class LibMcpTest final : public QObject
 
 private slots:
     void managerSerialization();  // 验证客户端配置的序列化与反序列化
+    void managerRejectsLegacyProtocol();  // 验证 HTTP 可达但旧协议的 Client 不会进入 Ready
     void rejectsInvalidToolSchema();  // 验证工具注册拒绝非法 JSON Schema 2020-12
     void wireMetadataAndDiscover();   // 验证请求级元数据校验与 Server 能力发现
     void statelessHttpProtocol();     // 验证无 Session 的独立 HTTP 请求往返
     void stdioProtocol();             // 验证子进程 STDIO 的逐行 JSON 请求往返
     void inMemoryProtocol();       // 验证工具、资源和提示词的内存协议交互
 };
+
+void LibMcpTest::managerRejectsLegacyProtocol()  // 验证 HTTP 可达但旧协议的 Client 不会进入 Ready
+{
+    LegacyProtocolHttpServer legacyServer;  // 模拟高德当前 server/discover 行为
+    QVERIFY(legacyServer.start());
+    McpClientManager manager;  // 执行完整启用与版本验证流程
+    McpClientConfig config;  // 指向本地旧协议模拟 Server 的 Client 配置
+    config.id = QStringLiteral("legacy-http");
+    config.name = QStringLiteral("Legacy HTTP");
+    config.transportType = QStringLiteral("streamable-http");
+    config.transportConfig = {
+        {QStringLiteral("url"),
+         QStringLiteral("http://127.0.0.1:%1/mcp").arg(legacyServer.port())}};
+    QVERIFY(manager.addConfig(config));
+
+    McpResult<void> result = McpResult<void>::success();  // 接收完整启用流程的最终结果
+    QVERIFY(waitForOperation(manager.startClient(config.id), result, 5000));
+    QVERIFY(result.isError());
+    QCOMPARE(result.error().code, McpErrorCode::UnsupportedProtocolVersion);
+    QCOMPARE(manager.clientState(config.id), McpClientManager::ClientState::Error);
+    QCOMPARE(manager.clientTransportState(config.id),
+             McpClientManager::TransportState::Reachable);
+    QCOMPARE(manager.clientProtocolState(config.id),
+             McpClientManager::ProtocolState::Incompatible);
+    QVERIFY(manager.clientEnabled(config.id));
+    QVERIFY(manager.clientTools(config.id).isEmpty());
+    QVERIFY(manager.clientResources(config.id).isEmpty());
+    QVERIFY(manager.clientResourceTemplates(config.id).isEmpty());
+    QVERIFY(manager.clientPrompts(config.id).isEmpty());
+    QVERIFY(manager.clientDiscovery(config.id).supportedVersions.isEmpty());
+    QTRY_VERIFY_WITH_TIMEOUT(!manager.client(config.id)->isRunning(), 3000);
+
+    McpResult<void> stopResult = McpResult<void>::failure({});  // 接收用户关闭启用开关的结果
+    QVERIFY(waitForOperation(manager.stopClient(config.id), stopResult, 3000));
+    QVERIFY(stopResult.isSuccess());
+    QCOMPARE(manager.clientState(config.id), McpClientManager::ClientState::Disabled);
+    QCOMPARE(manager.clientTransportState(config.id),
+             McpClientManager::TransportState::Stopped);
+    QCOMPARE(manager.clientProtocolState(config.id),
+             McpClientManager::ProtocolState::NotChecked);
+    QVERIFY(!manager.clientEnabled(config.id));
+}
 
 void LibMcpTest::managerSerialization()  // 验证客户端配置的序列化与反序列化
 {
